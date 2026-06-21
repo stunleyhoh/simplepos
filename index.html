@@ -63,14 +63,6 @@
       <div id="cartItems" class="cart-items"></div>
 
       <div class="totals">
-        <form id="operatorLoginForm" class="operator-login">
-          <strong>POS 使用者</strong>
-          <input id="operatorEmailInput" type="email" autocomplete="username" required placeholder="授权用户邮箱">
-          <button class="primary" type="submit">登录收银</button>
-          <button id="googleLoginBtn" class="ghost" type="button">Google 登录</button>
-          <button id="operatorLogoutBtn" class="ghost hidden" type="button">退出收银</button>
-          <p id="operatorMessage" class="form-message">请使用管理员授权的邮箱登录后收银。</p>
-        </form>
         <div class="customer-box">
           <strong>客户资料</strong>
           <input id="customerNameInput" placeholder="客户姓名">
@@ -267,6 +259,25 @@
       <button type="button" data-app-view="transactions">转账记录</button>
       <button type="button" data-app-view="report">报告</button>
       <button type="button" data-app-view="settings">设置</button>
+    </div>
+  </nav>
+
+  <nav id="cashierMenu" class="cashier-menu" aria-label="收银菜单">
+    <button id="cashierToggleBtn" class="cashier-toggle" type="button" aria-expanded="false">收银</button>
+    <div class="cashier-panel" aria-label="收银员菜单">
+      <div class="cashier-status">
+        <strong>已登录操作员</strong>
+        <span id="cashierOperatorText">未登录</span>
+      </div>
+      <button id="quickCheckoutBtn" class="primary" type="button">开始收银 / 结算</button>
+      <form id="operatorLoginForm" class="operator-login">
+        <strong>员工登录 / 登出</strong>
+        <input id="operatorEmailInput" type="email" autocomplete="username" required placeholder="授权用户邮箱">
+        <button class="primary" type="submit">登录收银</button>
+        <button id="googleLoginBtn" class="ghost" type="button">Google 登录</button>
+        <button id="operatorLogoutBtn" class="ghost hidden" type="button">退出收银</button>
+        <p id="operatorMessage" class="form-message">请使用管理员授权的邮箱登录后收银。</p>
+      </form>
     </div>
   </nav>
 

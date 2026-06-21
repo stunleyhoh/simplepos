@@ -464,9 +464,9 @@ select {
   display: none !important;
 }
 
-.app-menu {
+.app-menu,
+.cashier-menu {
   position: fixed;
-  left: 18px;
   bottom: 18px;
   z-index: 20;
   display: grid;
@@ -474,7 +474,17 @@ select {
   align-items: end;
 }
 
+.app-menu {
+  left: 18px;
+}
+
+.cashier-menu {
+  right: 18px;
+  width: min(320px, calc(100% - 36px));
+}
+
 .menu-toggle,
+.cashier-toggle,
 .menu-items button {
   min-height: 44px;
   border: 1px solid var(--line);
@@ -486,22 +496,53 @@ select {
   box-shadow: var(--shadow);
 }
 
-.menu-toggle {
+.menu-toggle,
+.cashier-toggle {
   background: var(--brand);
   color: #fff;
   border-color: var(--brand);
 }
 
-.menu-items {
+.cashier-toggle {
+  justify-self: end;
+}
+
+.menu-items,
+.cashier-panel {
   display: none;
   order: -1;
-  grid-template-columns: 1fr;
   gap: 8px;
+}
+
+.menu-items {
+  grid-template-columns: 1fr;
   width: 148px;
 }
 
 .app-menu.open .menu-items {
   display: grid;
+}
+
+.cashier-menu.open .cashier-panel {
+  display: grid;
+}
+
+.cashier-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.cashier-status {
+  display: grid;
+  gap: 3px;
+}
+
+.cashier-status span {
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .menu-items button {

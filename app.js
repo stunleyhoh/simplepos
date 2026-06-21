@@ -17,7 +17,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.30";
+const APP_VERSION = "v0.31";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -83,6 +83,10 @@ const els = {
   versionStatus: document.querySelector("#versionStatus"),
   appMenu: document.querySelector("#appMenu"),
   menuToggleBtn: document.querySelector("#menuToggleBtn"),
+  cashierMenu: document.querySelector("#cashierMenu"),
+  cashierToggleBtn: document.querySelector("#cashierToggleBtn"),
+  cashierOperatorText: document.querySelector("#cashierOperatorText"),
+  quickCheckoutBtn: document.querySelector("#quickCheckoutBtn"),
   installBtn: document.querySelector("#installBtn"),
   seedBtn: document.querySelector("#seedBtn"),
   searchInput: document.querySelector("#searchInput"),
@@ -484,6 +488,12 @@ function renderOperatorAccess() {
       ? "收银分行不匹配"
       : "POS未登录";
   els.operatorStatus.style.color = allowed ? "#0f766e" : "#66756f";
+  els.cashierOperatorText.textContent = allowed
+    ? `${operator.name} · ${getBranchName(operator.branchId)}`
+    : operator
+      ? `${operator.name} · 分行不匹配`
+      : "未登录";
+  els.quickCheckoutBtn.textContent = cart.length ? "结算当前订单" : "开始收银";
   els.operatorLogoutBtn.classList.toggle("hidden", !operator);
   els.operatorMessage.classList.toggle("error", Boolean(operator && !allowed));
   if (allowed) {
@@ -2045,6 +2055,19 @@ els.menuToggleBtn.addEventListener("click", () => {
   const open = !els.appMenu.classList.contains("open");
   els.appMenu.classList.toggle("open", open);
   els.menuToggleBtn.setAttribute("aria-expanded", String(open));
+  if (open) {
+    els.cashierMenu.classList.remove("open");
+    els.cashierToggleBtn.setAttribute("aria-expanded", "false");
+  }
+});
+els.cashierToggleBtn.addEventListener("click", () => {
+  const open = !els.cashierMenu.classList.contains("open");
+  els.cashierMenu.classList.toggle("open", open);
+  els.cashierToggleBtn.setAttribute("aria-expanded", String(open));
+  if (open) {
+    els.appMenu.classList.remove("open");
+    els.menuToggleBtn.setAttribute("aria-expanded", "false");
+  }
 });
 for (const button of document.querySelectorAll("[data-app-view]")) {
   button.addEventListener("click", () => setAppView(button.dataset.appView));
@@ -2074,6 +2097,14 @@ els.salesSearchInput.addEventListener("input", renderSales);
 els.todaySalesBtn.addEventListener("click", () => {
   els.salesDateInput.value = inputDate();
   renderSales();
+});
+els.quickCheckoutBtn.addEventListener("click", () => {
+  setAppView("order");
+  if (cart.length) {
+    checkout();
+  } else {
+    els.searchInput.focus();
+  }
 });
 els.reportStartInput.addEventListener("change", renderGlobalDashboard);
 els.reportEndInput.addEventListener("change", renderGlobalDashboard);
