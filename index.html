@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <title>简单草本 POS 系统</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">可上线 / 可离线</p>
+      <h1>简单草本 POS 系统</h1>
+    </div>
+    <div class="status-row">
+      <span id="networkStatus" class="status">检测中</span>
+      <button id="installBtn" class="ghost hidden" type="button">安装到电脑</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <section class="panel catalog-panel" aria-labelledby="catalogTitle">
+      <div class="panel-header">
+        <div>
+          <h2 id="catalogTitle">商品</h2>
+          <p>点击商品加入购物车</p>
+        </div>
+        <button id="seedBtn" class="ghost" type="button">恢复示例商品</button>
+      </div>
+
+      <div class="toolbar">
+        <input id="searchInput" type="search" placeholder="搜索商品名称或条码">
+        <select id="categoryFilter" aria-label="按分类筛选">
+          <option value="all">全部分类</option>
+        </select>
+      </div>
+
+      <div id="productGrid" class="product-grid" aria-live="polite"></div>
+    </section>
+
+    <section class="panel cart-panel" aria-labelledby="cartTitle">
+      <div class="panel-header">
+        <div>
+          <h2 id="cartTitle">当前订单</h2>
+          <p id="cartHint">还没有商品</p>
+        </div>
+        <button id="clearCartBtn" class="ghost danger" type="button">清空</button>
+      </div>
+
+      <div id="cartItems" class="cart-items"></div>
+
+      <div class="totals">
+        <label>
+          折扣
+          <input id="discountInput" type="number" min="0" step="0.01" value="0">
+        </label>
+        <label>
+          实收
+          <input id="paidInput" type="number" min="0" step="0.01" placeholder="客户付款金额">
+        </label>
+        <div class="total-line">
+          <span>小计</span>
+          <strong id="subtotalText">RM 0.00</strong>
+        </div>
+        <div class="total-line">
+          <span>应收</span>
+          <strong id="totalText">RM 0.00</strong>
+        </div>
+        <div class="total-line">
+          <span>找零</span>
+          <strong id="changeText">RM 0.00</strong>
+        </div>
+        <button id="checkoutBtn" class="primary" type="button">完成收款</button>
+      </div>
+    </section>
+
+    <section class="panel admin-panel" aria-labelledby="adminTitle">
+      <div class="panel-header">
+        <div>
+          <h2 id="adminTitle">商品管理</h2>
+          <p>数据保存在这台设备的浏览器里</p>
+        </div>
+      </div>
+
+      <form id="productForm" class="product-form">
+        <input id="nameInput" required placeholder="商品名称">
+        <input id="barcodeInput" placeholder="条码 / SKU">
+        <input id="categoryInput" required placeholder="分类">
+        <input id="priceInput" required type="number" min="0" step="0.01" placeholder="售价">
+        <input id="stockInput" required type="number" min="0" step="1" placeholder="库存">
+        <button class="primary" type="submit">保存商品</button>
+      </form>
+
+      <div class="admin-actions">
+        <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
+        <button id="resetDataBtn" class="ghost danger" type="button">清空全部数据</button>
+      </div>
+    </section>
+
+    <section class="panel history-panel" aria-labelledby="historyTitle">
+      <div class="panel-header">
+        <div>
+          <h2 id="historyTitle">今日销售</h2>
+          <p id="salesSummary">暂无销售</p>
+        </div>
+      </div>
+      <div id="salesList" class="sales-list"></div>
+    </section>
+  </main>
+
+  <dialog id="receiptDialog">
+    <div class="receipt">
+      <div class="panel-header">
+        <div>
+          <h2>收款成功</h2>
+          <p id="receiptNo"></p>
+        </div>
+        <button id="closeReceiptBtn" class="ghost" type="button">关闭</button>
+      </div>
+      <pre id="receiptText"></pre>
+      <button id="printReceiptBtn" class="primary" type="button">打印小票</button>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
