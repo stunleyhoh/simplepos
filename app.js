@@ -17,7 +17,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.29";
+const APP_VERSION = "v0.30";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -59,6 +59,20 @@ let cloudSessionActive = false;
 let currentCloudUser = null;
 let reportRangeInitialized = false;
 let autoFillPaid = true;
+let currentView = "order";
+
+function setAppView(view) {
+  currentView = view;
+  document.body.dataset.view = view;
+  for (const button of document.querySelectorAll("[data-app-view]")) {
+    button.classList.toggle("active", button.dataset.appView === view);
+  }
+  els.appMenu.classList.remove("open");
+  els.menuToggleBtn.setAttribute("aria-expanded", "false");
+  if (view !== "order" && !isAdmin()) {
+    els.adminLoginMessage.textContent = "请先进入后台，才能查看这个功能。";
+  }
+}
 
 const els = {
   networkStatus: document.querySelector("#networkStatus"),
@@ -67,6 +81,8 @@ const els = {
   operatorStatus: document.querySelector("#operatorStatus"),
   adminStatus: document.querySelector("#adminStatus"),
   versionStatus: document.querySelector("#versionStatus"),
+  appMenu: document.querySelector("#appMenu"),
+  menuToggleBtn: document.querySelector("#menuToggleBtn"),
   installBtn: document.querySelector("#installBtn"),
   seedBtn: document.querySelector("#seedBtn"),
   searchInput: document.querySelector("#searchInput"),
@@ -2025,6 +2041,14 @@ function resetAllData() {
 els.searchInput.addEventListener("input", renderProducts);
 els.categoryFilter.addEventListener("change", renderProducts);
 els.refreshCloudBtn.addEventListener("click", loadCloudData);
+els.menuToggleBtn.addEventListener("click", () => {
+  const open = !els.appMenu.classList.contains("open");
+  els.appMenu.classList.toggle("open", open);
+  els.menuToggleBtn.setAttribute("aria-expanded", String(open));
+});
+for (const button of document.querySelectorAll("[data-app-view]")) {
+  button.addEventListener("click", () => setAppView(button.dataset.appView));
+}
 els.branchSelect.addEventListener("change", () => {
   currentBranchId = els.branchSelect.value;
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
@@ -2143,6 +2167,7 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+setAppView("order");
 migrateManagementData();
 migrateProductsForBranches();
 renderAll();

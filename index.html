@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body data-view="order">
   <header class="app-header">
     <div>
       <p class="eyebrow">可上线 / 可离线</p>
@@ -26,7 +26,7 @@
   </header>
 
   <main class="app-shell">
-    <section class="panel catalog-panel" aria-labelledby="catalogTitle">
+    <section class="panel catalog-panel" data-view-panel="order" aria-labelledby="catalogTitle">
       <div class="panel-header">
         <div>
           <h2 id="catalogTitle">商品</h2>
@@ -51,7 +51,7 @@
       <div id="productGrid" class="product-grid" aria-live="polite"></div>
     </section>
 
-    <section class="panel cart-panel" aria-labelledby="cartTitle">
+    <section class="panel cart-panel" data-view-panel="order" aria-labelledby="cartTitle">
       <div class="panel-header">
         <div>
           <h2 id="cartTitle">当前订单</h2>
@@ -100,7 +100,7 @@
       </div>
     </section>
 
-    <section class="panel admin-panel" aria-labelledby="adminTitle">
+    <section class="panel admin-panel" data-admin-shell aria-labelledby="adminTitle">
       <div class="panel-header">
         <div>
           <h2 id="adminTitle">后台管理</h2>
@@ -117,14 +117,14 @@
       </form>
 
       <div id="adminContent" class="hidden">
-        <div class="toolbar report-toolbar" aria-label="报表日期范围">
+        <div class="toolbar report-toolbar" data-view-panel="report" aria-label="报表日期范围">
           <input id="reportStartInput" type="date" aria-label="报表开始日期">
           <input id="reportEndInput" type="date" aria-label="报表结束日期">
           <button id="reportTodayBtn" class="ghost" type="button">今天</button>
           <button id="reportMonthBtn" class="ghost" type="button">本月</button>
           <button id="reportAllBtn" class="ghost" type="button">全部</button>
         </div>
-        <div class="global-dashboard">
+        <div class="global-dashboard" data-view-panel="report">
           <div class="metric-card">
             <span>全局销售额</span>
             <strong id="globalRevenueText">RM 0.00</strong>
@@ -143,47 +143,47 @@
           </div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="report">
           <h3>分行表现</h3>
           <div id="branchOverview" class="branch-overview"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="report">
           <h3>热销商品</h3>
           <div id="topProductsList" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="report">
           <h3>每日销售趋势</h3>
           <div id="dailyTrendList" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>同步状态</h3>
           <div id="syncOverview" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>最近审计</h3>
           <div id="auditList" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="inventory">
           <h3>库存流水</h3>
           <div id="stockAdjustmentList" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="transactions">
           <h3>客户跟进</h3>
           <div id="followUpList" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="inventory">
           <h3>低库存提醒</h3>
           <div id="lowStockList" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>业务设置</h3>
           <form id="settingsForm" class="settings-form">
             <input id="businessNameInput" required placeholder="品牌 / 小票标题">
@@ -195,7 +195,7 @@
           </form>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>开设新分行</h3>
           <form id="branchForm" class="branch-form">
             <input id="branchNameInput" required placeholder="分行名称，例如：槟城分行">
@@ -204,7 +204,7 @@
           <div id="branchList" class="management-list"></div>
         </div>
 
-        <div class="panel-subsection">
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>授权 POS 用户</h3>
           <form id="userForm" class="user-form">
             <input id="userNameInput" required placeholder="使用者姓名">
@@ -215,7 +215,7 @@
           <div id="userList" class="management-list"></div>
         </div>
 
-        <form id="productForm" class="product-form">
+        <form id="productForm" class="product-form" data-view-panel="menu">
           <input id="nameInput" required placeholder="商品名称">
           <input id="barcodeInput" placeholder="条码 / SKU">
           <input id="categoryInput" required placeholder="分类">
@@ -224,7 +224,7 @@
           <button class="primary" type="submit">保存商品</button>
         </form>
 
-        <div class="admin-actions">
+        <div class="admin-actions" data-view-panel="settings">
           <button id="initCloudBtn" class="ghost" type="button">初始化云端数据</button>
           <button id="syncPendingBtn" class="ghost" type="button">补传离线订单</button>
           <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
@@ -242,7 +242,7 @@
       </div>
     </section>
 
-    <section class="panel history-panel" aria-labelledby="historyTitle">
+    <section class="panel history-panel" data-view-panel="transactions" aria-labelledby="historyTitle">
       <div class="panel-header">
         <div>
           <h2 id="historyTitle">今日销售</h2>
@@ -257,6 +257,18 @@
       <div id="salesList" class="sales-list"></div>
     </section>
   </main>
+
+  <nav id="appMenu" class="app-menu" aria-label="主菜单">
+    <button id="menuToggleBtn" class="menu-toggle" type="button" aria-expanded="false">菜单</button>
+    <div class="menu-items" aria-label="功能菜单">
+      <button class="active" type="button" data-app-view="order">下单</button>
+      <button type="button" data-app-view="menu">菜单</button>
+      <button type="button" data-app-view="inventory">库存</button>
+      <button type="button" data-app-view="transactions">转账记录</button>
+      <button type="button" data-app-view="report">报告</button>
+      <button type="button" data-app-view="settings">设置</button>
+    </div>
+  </nav>
 
   <dialog id="receiptDialog">
     <div class="receipt">

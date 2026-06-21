@@ -85,7 +85,42 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.8fr);
   gap: 18px;
-  padding: 18px clamp(16px, 3vw, 36px) 36px;
+  padding: 18px clamp(16px, 3vw, 36px) 88px;
+}
+
+body:not([data-view="order"]) .app-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+[data-view-panel],
+[data-admin-shell] {
+  display: none !important;
+}
+
+body[data-view="order"] [data-view-panel~="order"],
+body[data-view="transactions"] [data-view-panel~="transactions"],
+body[data-view="menu"] [data-admin-shell],
+body[data-view="inventory"] [data-admin-shell],
+body[data-view="transactions"] [data-admin-shell],
+body[data-view="report"] [data-admin-shell],
+body[data-view="settings"] [data-admin-shell] {
+  display: block !important;
+}
+
+body[data-view="menu"] #adminContent [data-view-panel~="menu"],
+body[data-view="inventory"] #adminContent [data-view-panel~="inventory"],
+body[data-view="transactions"] #adminContent [data-view-panel~="transactions"],
+body[data-view="report"] #adminContent [data-view-panel~="report"],
+body[data-view="settings"] #adminContent [data-view-panel~="settings"] {
+  display: grid !important;
+}
+
+body[data-view="report"] #adminContent .global-dashboard {
+  display: grid !important;
+}
+
+body[data-view="settings"] #adminContent .admin-actions {
+  display: flex !important;
 }
 
 .panel {
@@ -102,6 +137,10 @@ h2 {
 
 .cart-panel {
   grid-row: span 2;
+}
+
+body:not([data-view="order"]) .cart-panel {
+  grid-row: auto;
 }
 
 .panel-header {
@@ -423,6 +462,56 @@ select {
 
 .hidden {
   display: none !important;
+}
+
+.app-menu {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+
+.menu-toggle,
+.menu-items button {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 800;
+  box-shadow: var(--shadow);
+}
+
+.menu-toggle {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+
+.menu-items {
+  display: none;
+  order: -1;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  width: 148px;
+}
+
+.app-menu.open .menu-items {
+  display: grid;
+}
+
+.menu-items button {
+  text-align: left;
+}
+
+.menu-items button.active {
+  border-color: var(--brand);
+  color: var(--brand-dark);
+  background: #eef8f6;
 }
 
 dialog {
