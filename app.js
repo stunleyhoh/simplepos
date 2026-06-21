@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   branches: "simple-herbal-pos-branches",
   authorizedUsers: "simple-herbal-pos-authorized-users",
   operatorEmail: "simple-herbal-pos-operator-email",
+  paymentMethod: "simple-herbal-pos-payment-method",
   pendingSales: "simple-herbal-pos-pending-sales",
   pendingSaleUpdates: "simple-herbal-pos-pending-sale-updates",
   pendingProducts: "simple-herbal-pos-pending-products",
@@ -17,7 +18,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.35";
+const APP_VERSION = "v0.38";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -55,11 +56,13 @@ let deferredInstallPrompt = null;
 let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
 let currentBranchId = localStorage.getItem(STORAGE_KEYS.branchId) || "hq";
 let operatorEmail = localStorage.getItem(STORAGE_KEYS.operatorEmail) || "";
+let preferredPaymentMethod = localStorage.getItem(STORAGE_KEYS.paymentMethod) || "现金";
 let cloudSessionActive = false;
 let currentCloudUser = null;
 let reportRangeInitialized = false;
 let autoFillPaid = true;
 let currentView = "order";
+let paymentMethodInitialized = false;
 let showMoreSales = false;
 
 const VIEW_META = {
@@ -126,6 +129,8 @@ const els = {
   customerPhoneInput: document.querySelector("#customerPhoneInput"),
   discountInput: document.querySelector("#discountInput"),
   paidInput: document.querySelector("#paidInput"),
+  paymentMethodInput: document.querySelector("#paymentMethodInput"),
+  paymentReferenceInput: document.querySelector("#paymentReferenceInput"),
   subtotalText: document.querySelector("#subtotalText"),
   totalText: document.querySelector("#totalText"),
   changeText: document.querySelector("#changeText"),
@@ -146,6 +151,7 @@ const els = {
   syncPendingBtn: document.querySelector("#syncPendingBtn"),
   exportBtn: document.querySelector("#exportBtn"),
   exportSummaryBtn: document.querySelector("#exportSummaryBtn"),
+  exportPaymentSummaryBtn: document.querySelector("#exportPaymentSummaryBtn"),
   exportProductSalesBtn: document.querySelector("#exportProductSalesBtn"),
   exportInventoryBtn: document.querySelector("#exportInventoryBtn"),
   exportCustomersBtn: document.querySelector("#exportCustomersBtn"),
@@ -167,6 +173,7 @@ const els = {
   branchOverview: document.querySelector("#branchOverview"),
   topProductsList: document.querySelector("#topProductsList"),
   dailyTrendList: document.querySelector("#dailyTrendList"),
+  paymentSummaryList: document.querySelector("#paymentSummaryList"),
   menuSearchInput: document.querySelector("#menuSearchInput"),
   menuProductList: document.querySelector("#menuProductList"),
   inventorySearchInput: document.querySelector("#inventorySearchInput"),
@@ -193,6 +200,7 @@ const els = {
   salesSummary: document.querySelector("#salesSummary"),
   salesDateInput: document.querySelector("#salesDateInput"),
   salesSearchInput: document.querySelector("#salesSearchInput"),
+  salesPaymentFilter: document.querySelector("#salesPaymentFilter"),
   toggleSalesLimitBtn: document.querySelector("#toggleSalesLimitBtn"),
   todaySalesBtn: document.querySelector("#todaySalesBtn"),
   salesList: document.querySelector("#salesList"),
@@ -1189,8 +1197,24 @@ function getDailySalesRows(reportSales = getReportSales()) {
   return [...dayMap.values()].sort((a, b) => b.day.localeCompare(a.day));
 }
 
+function getPaymentSummaryRows(reportSales = getReportSales()) {
+  const paymentMap = new Map();
+  for (const sale of reportSales) {
+    const method = sale.payment?.method || "现金";
+    const existing = paymentMap.get(method) || { method, orders: 0, total: 0 };
+    existing.orders += 1;
+    existing.total += Number(sale.total || 0);
+    paymentMap.set(method, existing);
+  }
+  return [...paymentMap.values()].sort((a, b) => b.total - a.total);
+}
+
 function renderAll() {
   els.versionStatus.textContent = APP_VERSION;
+  if (!paymentMethodInitialized) {
+    els.paymentMethodInput.value = preferredPaymentMethod;
+    paymentMethodInitialized = true;
+  }
   renderBranchSelect();
   renderCategoryFilter();
   renderProducts();
@@ -1618,6 +1642,10 @@ function getCartDueAmount() {
   return Math.max(0, subtotal - discount);
 }
 
+function needsPaymentReference(method) {
+  return method !== "现金";
+}
+
 async function checkout() {
   if (!cart.length) return;
   if (!requireOperator()) return;
@@ -1625,6 +1653,12 @@ async function checkout() {
   if (totals.paid < totals.total) {
     alert("实收金额不足。");
     els.paidInput.focus();
+    return;
+  }
+  const paymentMethod = els.paymentMethodInput.value;
+  const paymentReference = els.paymentReferenceInput.value.trim();
+  if (needsPaymentReference(paymentMethod) && !paymentReference && !confirm("这个付款方式建议填写参考号。确定继续收款吗？")) {
+    els.paymentReferenceInput.focus();
     return;
   }
 
@@ -1654,6 +1688,10 @@ async function checkout() {
     total: totals.total,
     paid: totals.paid,
     change: totals.change,
+    payment: {
+      method: paymentMethod,
+      reference: paymentReference
+    },
     syncStatus: navigator.onLine && hasCloud() ? "syncing" : "pending"
   };
 
@@ -1675,6 +1713,7 @@ async function checkout() {
   els.customerPhoneInput.value = "";
   els.discountInput.value = "0";
   els.paidInput.value = "";
+  els.paymentReferenceInput.value = "";
   autoFillPaid = true;
   save(STORAGE_KEYS.products, products);
   save(STORAGE_KEYS.sales, sales);
@@ -1727,6 +1766,8 @@ function buildReceipt(sale) {
   lines.push(`应收：${money(sale.total)}`);
   lines.push(`实收：${money(sale.paid)}`);
   lines.push(`找零：${money(sale.change)}`);
+  lines.push(`付款方式：${sale.payment?.method || "现金"}`);
+  if (sale.payment?.reference) lines.push(`参考号：${sale.payment.reference}`);
   lines.push(appSettings.receiptFooter);
   return lines.join("\n");
 }
@@ -1735,9 +1776,11 @@ function renderSales() {
   if (!els.salesDateInput.value) els.salesDateInput.value = inputDate();
   const selectedDate = els.salesDateInput.value;
   const keyword = els.salesSearchInput.value.trim().toLowerCase();
+  const paymentFilter = els.salesPaymentFilter.value;
   const selectedSales = sales.filter((sale) => {
     const matchDate = inputDate(new Date(sale.createdAt)) === selectedDate;
     if (!matchDate) return false;
+    if (paymentFilter !== "all" && (sale.payment?.method || "现金") !== paymentFilter) return false;
     if (!keyword) return true;
     const haystack = [
       sale.id,
@@ -1778,6 +1821,7 @@ function renderSales() {
       <span class="product-meta">分行：${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))}</span>
       <span class="product-meta">收银员：${escapeHtml(sale.operator?.name || "-")}</span>
       <span class="product-meta">同步：${pendingSales.some((item) => item.id === sale.id) ? "待同步" : "已处理"}</span>
+      <span class="product-meta">付款：${escapeHtml(sale.payment?.method || "现金")}${sale.payment?.reference ? ` · ${escapeHtml(sale.payment.reference)}` : ""}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
       ${isAdmin() && !isSaleVoided(sale) ? '<button class="ghost danger" type="button" data-void-sale>作废并回补库存</button>' : ""}
@@ -1861,6 +1905,25 @@ function renderGlobalDashboard() {
       els.dailyTrendList.append(row);
     }
   }
+
+  const paymentRows = getPaymentSummaryRows(reportSales);
+  els.paymentSummaryList.innerHTML = "";
+  if (!paymentRows.length) {
+    els.paymentSummaryList.innerHTML = '<div class="empty">当前日期范围暂无付款资料</div>';
+  } else {
+    for (const item of paymentRows) {
+      const row = document.createElement("div");
+      row.className = "management-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(item.method)}</strong>
+          <small>${item.orders} 单</small>
+        </div>
+        <small>${money(item.total)}</small>
+      `;
+      els.paymentSummaryList.append(row);
+    }
+  }
 }
 
 function saveProduct(event) {
@@ -1939,7 +2002,7 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "付款方式", "付款参考号", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
@@ -1952,6 +2015,8 @@ function exportSales() {
       new Date(sale.createdAt).toLocaleString(),
       sale.customer?.name || "",
       sale.customer?.phone || "",
+      sale.payment?.method || "现金",
+      sale.payment?.reference || "",
       getFollowUpStatusText(sale),
       sale.followUp?.updatedAt ? new Date(sale.followUp.updatedAt).toLocaleString() : "",
       sale.service?.name || "",
@@ -2004,6 +2069,19 @@ function exportProductSales() {
     return;
   }
   downloadCsv(`product-sales-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportPaymentSummary() {
+  if (!requireAdmin()) return;
+  const rows = [["日期范围", "统计口径", "付款方式", "订单数", "金额"]];
+  for (const item of getPaymentSummaryRows()) {
+    rows.push([getReportRangeLabel(), "不含已作废订单", item.method, item.orders, item.total]);
+  }
+  if (rows.length === 1) {
+    alert("当前日期范围还没有付款资料。");
+    return;
+  }
+  downloadCsv(`payment-summary-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 }
 
 function exportInventory() {
@@ -2123,7 +2201,10 @@ function exportBackup() {
     pendingStockAdjustments,
     pendingAuditLogs,
     stockAdjustments,
-    auditLogs
+    auditLogs,
+    preferences: {
+      paymentMethod: preferredPaymentMethod
+    }
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -2158,6 +2239,8 @@ function restoreBackupFile(file) {
       stockAdjustments = Array.isArray(backup.stockAdjustments) ? backup.stockAdjustments : [];
       auditLogs = Array.isArray(backup.auditLogs) ? backup.auditLogs : [];
       appSettings = backup.settings || defaultSettings;
+      preferredPaymentMethod = backup.preferences?.paymentMethod || preferredPaymentMethod;
+      paymentMethodInitialized = false;
 
       save(STORAGE_KEYS.branches, branches);
       save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
@@ -2171,6 +2254,7 @@ function restoreBackupFile(file) {
       save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
       save(STORAGE_KEYS.auditLogs, auditLogs);
       save(STORAGE_KEYS.settings, appSettings);
+      localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
       migrateManagementData();
       migrateProductsForBranches();
       renderAll();
@@ -2293,8 +2377,13 @@ els.paidInput.addEventListener("input", () => {
   autoFillPaid = false;
   renderCart();
 });
+els.paymentMethodInput.addEventListener("change", () => {
+  preferredPaymentMethod = els.paymentMethodInput.value;
+  localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
+});
 els.salesDateInput.addEventListener("change", renderSales);
 els.salesSearchInput.addEventListener("input", renderSales);
+els.salesPaymentFilter.addEventListener("change", renderSales);
 els.menuSearchInput.addEventListener("input", renderMenuProductList);
 els.inventorySearchInput.addEventListener("input", renderInventoryOverview);
 els.toggleSalesLimitBtn.addEventListener("click", () => {
@@ -2334,6 +2423,7 @@ els.initCloudBtn.addEventListener("click", initializeCloudData);
 els.syncPendingBtn.addEventListener("click", syncPendingChanges);
 els.exportBtn.addEventListener("click", exportSales);
 els.exportSummaryBtn.addEventListener("click", exportBranchSummary);
+els.exportPaymentSummaryBtn.addEventListener("click", exportPaymentSummary);
 els.exportProductSalesBtn.addEventListener("click", exportProductSales);
 els.exportInventoryBtn.addEventListener("click", exportInventory);
 els.exportCustomersBtn.addEventListener("click", exportCustomers);

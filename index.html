@@ -76,6 +76,21 @@
           实收
           <input id="paidInput" type="number" min="0" step="0.01" placeholder="客户付款金额">
         </label>
+        <label>
+          付款方式
+          <select id="paymentMethodInput">
+            <option value="现金">现金</option>
+            <option value="银行转账">银行转账</option>
+            <option value="Touch n Go">Touch n Go</option>
+            <option value="DuitNow">DuitNow</option>
+            <option value="银行卡">银行卡</option>
+            <option value="简单支付 / SimplePay">简单支付 / SimplePay</option>
+          </select>
+        </label>
+        <label>
+          参考号
+          <input id="paymentReferenceInput" placeholder="转账 / 收据参考号">
+        </label>
         <div class="total-line">
           <span>小计</span>
           <strong id="subtotalText">RM 0.00</strong>
@@ -148,6 +163,11 @@
         <div class="panel-subsection" data-view-panel="report">
           <h3>每日销售趋势</h3>
           <div id="dailyTrendList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection" data-view-panel="report">
+          <h3>付款方式汇总</h3>
+          <div id="paymentSummaryList" class="management-list"></div>
         </div>
 
         <div class="panel-subsection" data-view-panel="settings">
@@ -233,6 +253,7 @@
           <button id="syncPendingBtn" class="ghost" type="button">补传离线订单</button>
           <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
           <button id="exportSummaryBtn" class="ghost" type="button">导出分行汇总</button>
+          <button id="exportPaymentSummaryBtn" class="ghost" type="button">导出付款汇总</button>
           <button id="exportProductSalesBtn" class="ghost" type="button">导出商品排行</button>
           <button id="exportInventoryBtn" class="ghost" type="button">导出库存总表</button>
           <button id="exportCustomersBtn" class="ghost" type="button">导出客户名单</button>
@@ -256,6 +277,15 @@
       <div class="toolbar">
         <input id="salesDateInput" type="date" aria-label="销售日期">
         <input id="salesSearchInput" placeholder="搜索客户 / 电话 / 订单号" aria-label="搜索销售记录">
+        <select id="salesPaymentFilter" aria-label="按付款方式筛选">
+          <option value="all">全部付款</option>
+          <option value="现金">现金</option>
+          <option value="银行转账">银行转账</option>
+          <option value="Touch n Go">Touch n Go</option>
+          <option value="DuitNow">DuitNow</option>
+          <option value="银行卡">银行卡</option>
+          <option value="简单支付 / SimplePay">简单支付 / SimplePay</option>
+        </select>
         <button id="todaySalesBtn" class="ghost" type="button">今天</button>
       </div>
       <div id="salesList" class="sales-list"></div>
