@@ -47,6 +47,7 @@ const els = {
   searchInput: document.querySelector("#searchInput"),
   categoryFilter: document.querySelector("#categoryFilter"),
   branchSelect: document.querySelector("#branchSelect"),
+  refreshCloudBtn: document.querySelector("#refreshCloudBtn"),
   productGrid: document.querySelector("#productGrid"),
   cartHint: document.querySelector("#cartHint"),
   cartItems: document.querySelector("#cartItems"),
@@ -405,6 +406,50 @@ async function initializeCloudData() {
   }
 }
 
+function normalizeCloudSales(cloudSales) {
+  return cloudSales
+    .map((sale) => ({
+      ...sale,
+      createdAt: sale.createdAt?.toDate ? sale.createdAt.toDate().toISOString() : sale.createdAt
+    }))
+    .filter((sale) => sale.id && sale.createdAt);
+}
+
+async function loadCloudData() {
+  if (!hasCloud() || !navigator.onLine) return false;
+  try {
+    updateCloudStatus("正在读取云端资料");
+    const data = await window.cloudPOS.loadAllData();
+    if (data.branches.length) {
+      branches = data.branches.filter((branch) => branch.active !== false);
+      save(STORAGE_KEYS.branches, branches);
+    }
+    if (data.users.length) {
+      authorizedUsers = data.users.filter((user) => user.active !== false);
+      save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+    }
+    if (data.products.length) {
+      products = data.products.filter((product) => product.active !== false);
+      save(STORAGE_KEYS.products, products);
+    }
+    if (data.sales.length) {
+      const cloudSales = normalizeCloudSales(data.sales);
+      const mergedSales = [...cloudSales, ...sales.filter((sale) => !cloudSales.some((item) => item.id === sale.id))];
+      sales = mergedSales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      save(STORAGE_KEYS.sales, sales);
+    }
+    migrateManagementData();
+    migrateProductsForBranches();
+    updateCloudStatus("云端资料已更新", true);
+    renderAll();
+    return true;
+  } catch (error) {
+    updateCloudStatus("读取云端失败");
+    console.warn("Cloud data load failed", error);
+    return false;
+  }
+}
+
 function applyCloudUser(appUser) {
   if (!appUser || appUser.active === false) {
     updateCloudStatus("邮箱未授权");
@@ -432,6 +477,7 @@ function applyCloudUser(appUser) {
   localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   updateCloudStatus(`云端已登录：${appUser.email}`, true);
+  loadCloudData();
   syncPendingSales();
   renderAll();
 }
@@ -751,10 +797,13 @@ async function checkout() {
     syncStatus: navigator.onLine && hasCloud() ? "syncing" : "pending"
   };
 
+  const changedProducts = [];
   products = products.map((product) => {
     const sold = cart.find((item) => item.id === product.id);
     if (!sold) return product;
-    return setBranchStock(product, currentBranchId, getBranchStock(product) - sold.qty);
+    const updatedProduct = setBranchStock(product, currentBranchId, getBranchStock(product) - sold.qty);
+    changedProducts.push(updatedProduct);
+    return updatedProduct;
   });
   sales.unshift(sale);
   cart = [];
@@ -764,6 +813,9 @@ async function checkout() {
   els.paidInput.value = "";
   save(STORAGE_KEYS.products, products);
   save(STORAGE_KEYS.sales, sales);
+  for (const product of changedProducts) {
+    syncProductToCloud(product);
+  }
   syncSaleToCloud(sale);
   showReceipt(sale);
   renderAll();
@@ -985,6 +1037,7 @@ function resetAllData() {
 
 els.searchInput.addEventListener("input", renderProducts);
 els.categoryFilter.addEventListener("change", renderProducts);
+els.refreshCloudBtn.addEventListener("click", loadCloudData);
 els.branchSelect.addEventListener("change", () => {
   currentBranchId = els.branchSelect.value;
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);

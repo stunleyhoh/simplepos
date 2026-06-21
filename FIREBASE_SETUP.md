@@ -221,6 +221,29 @@ sales
 6. 系统会自动补传订单。
 7. 到 Firestore 的 `sales` 集合确认订单是否出现。
 
+## 第 12 步：部署到 Firebase Hosting
+
+项目已经加入：
+
+```text
+firebase.json
+.firebaserc
+```
+
+之后电脑安装 Firebase CLI 后，可以在项目文件夹运行：
+
+```powershell
+firebase deploy
+```
+
+部署成功后，网址通常是：
+
+```text
+https://simplepos-2900e.web.app
+```
+
+提醒：上线前要确保部署环境包含 `firebase-config.local.js`，或者把同等配置放进部署版本，否则网页无法连接 Firebase。
+
 ## GitHub Secret Scanning 提醒
 
 如果 GitHub 显示：

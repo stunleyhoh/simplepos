@@ -54,6 +54,16 @@ async function loadCollection(name) {
   return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
 }
 
+async function loadAllData() {
+  const [branches, users, products, sales] = await Promise.all([
+    loadCollection("branches"),
+    loadCollection("users"),
+    loadCollection("products"),
+    loadCollection("sales")
+  ]);
+  return { branches, users, products, sales };
+}
+
 async function saveBranch(branch) {
   await setDoc(doc(db, "branches", branch.id), {
     ...branch,
@@ -103,6 +113,7 @@ window.cloudPOS = {
   signOutGoogle,
   getCloudUser,
   loadCollection,
+  loadAllData,
   saveBranch,
   saveAuthorizedUser,
   saveProduct,
