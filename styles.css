@@ -243,6 +243,14 @@ select {
   padding: 0 0 12px;
 }
 
+.sale-item.voided {
+  opacity: 0.72;
+  background: #fff7f5;
+  border: 1px solid #ffd8d2;
+  border-radius: 8px;
+  padding: 12px;
+}
+
 .cart-item-top,
 .sale-item-top,
 .total-line {
@@ -426,6 +434,10 @@ select {
   gap: 10px;
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
+}
+
+.management-row:hover {
+  background: #f9fbfa;
 }
 
 .management-row small {

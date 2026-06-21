@@ -17,7 +17,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.32";
+const APP_VERSION = "v0.35";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -60,6 +60,7 @@ let currentCloudUser = null;
 let reportRangeInitialized = false;
 let autoFillPaid = true;
 let currentView = "order";
+let showMoreSales = false;
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -80,7 +81,8 @@ function setAppView(view) {
   els.menuToggleBtn.setAttribute("aria-expanded", "false");
   updateViewHeadings();
   if (view !== "order" && !isAdmin()) {
-    els.adminLoginMessage.textContent = "请先进入后台，才能查看这个功能。";
+    els.adminLoginMessage.textContent = `请先进入后台，才能查看「${VIEW_META[view]?.title || "这个功能"}」。`;
+    els.adminLoginMessage.classList.remove("error");
   }
 }
 
@@ -165,6 +167,10 @@ const els = {
   branchOverview: document.querySelector("#branchOverview"),
   topProductsList: document.querySelector("#topProductsList"),
   dailyTrendList: document.querySelector("#dailyTrendList"),
+  menuSearchInput: document.querySelector("#menuSearchInput"),
+  menuProductList: document.querySelector("#menuProductList"),
+  inventorySearchInput: document.querySelector("#inventorySearchInput"),
+  inventoryOverviewList: document.querySelector("#inventoryOverviewList"),
   syncOverview: document.querySelector("#syncOverview"),
   auditList: document.querySelector("#auditList"),
   stockAdjustmentList: document.querySelector("#stockAdjustmentList"),
@@ -187,6 +193,7 @@ const els = {
   salesSummary: document.querySelector("#salesSummary"),
   salesDateInput: document.querySelector("#salesDateInput"),
   salesSearchInput: document.querySelector("#salesSearchInput"),
+  toggleSalesLimitBtn: document.querySelector("#toggleSalesLimitBtn"),
   todaySalesBtn: document.querySelector("#todaySalesBtn"),
   salesList: document.querySelector("#salesList"),
   receiptDialog: document.querySelector("#receiptDialog"),
@@ -511,7 +518,7 @@ function renderOperatorAccess() {
     : operator
       ? `${operator.name} · 分行不匹配`
       : "未登录";
-  els.quickCheckoutBtn.textContent = cart.length ? "结算当前订单" : "开始收银";
+  els.quickCheckoutBtn.textContent = allowed ? (cart.length ? "结算当前订单" : "开始收银") : "员工登录";
   els.operatorLogoutBtn.classList.toggle("hidden", !operator);
   els.operatorMessage.classList.toggle("error", Boolean(operator && !allowed));
   if (allowed) {
@@ -582,7 +589,9 @@ async function syncSaleToCloud(sale) {
     return { ok: false, queued: true };
   }
   try {
-    if (window.cloudPOS.saveCheckout) {
+    if (isSaleVoided(sale)) {
+      await window.cloudPOS.saveSale(sale);
+    } else if (window.cloudPOS.saveCheckout) {
       await window.cloudPOS.saveCheckout(sale);
     } else {
       await window.cloudPOS.saveSale(sale);
@@ -607,7 +616,9 @@ async function syncPendingSales() {
   updateCloudStatus(`正在补传 ${pendingSales.length} 单`);
   for (const sale of [...pendingSales].reverse()) {
     try {
-      if (window.cloudPOS.saveCheckout) {
+      if (isSaleVoided(sale)) {
+        await window.cloudPOS.saveSale(sale);
+      } else if (window.cloudPOS.saveCheckout) {
         await window.cloudPOS.saveCheckout(sale);
       } else {
         await window.cloudPOS.saveSale(sale);
@@ -1131,7 +1142,7 @@ function ensureReportRange() {
 function getReportSales() {
   const startDate = els.reportStartInput.value;
   const endDate = els.reportEndInput.value;
-  return sales.filter((sale) => {
+  return getActiveSales().filter((sale) => {
     const saleDate = inputDate(new Date(sale.createdAt));
     if (startDate && saleDate < startDate) return false;
     if (endDate && saleDate > endDate) return false;
@@ -1188,11 +1199,81 @@ function renderAll() {
   renderSettingsForm();
   renderFollowUps();
   renderLowStock();
+  renderMenuProductList();
+  renderInventoryOverview();
   renderGlobalDashboard();
   renderManagementLists();
   renderAdminAccess();
   renderOperatorAccess();
   updateNetworkStatus();
+}
+
+function renderMenuProductList() {
+  if (!isAdmin()) return;
+  els.menuProductList.innerHTML = "";
+  const keyword = els.menuSearchInput.value.trim().toLowerCase();
+  const filteredProducts = products.filter((product) => {
+    if (!keyword) return true;
+    return [product.name, product.barcode, product.category]
+      .some((value) => String(value || "").toLowerCase().includes(keyword));
+  });
+  if (!filteredProducts.length) {
+    els.menuProductList.innerHTML = '<div class="empty">暂无菜单商品</div>';
+    return;
+  }
+  for (const product of filteredProducts.slice(0, 50)) {
+    const row = document.createElement("div");
+    row.className = "management-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(product.name)}</strong>
+        <small>${escapeHtml(product.category || "-")} · SKU ${escapeHtml(product.barcode || "-")}</small>
+      </div>
+      <small>${money(product.price)} · ${escapeHtml(getBranchName(currentBranchId))}库存 ${getBranchStock(product)}</small>
+    `;
+    row.addEventListener("click", () => fillProductForm(product));
+    els.menuProductList.append(row);
+  }
+}
+
+function fillProductForm(product) {
+  els.nameInput.value = product.name || "";
+  els.barcodeInput.value = product.barcode || "";
+  els.categoryInput.value = product.category || "";
+  els.priceInput.value = Number(product.price || 0);
+  els.stockInput.value = getBranchStock(product);
+  els.nameInput.focus();
+}
+
+function renderInventoryOverview() {
+  if (!isAdmin()) return;
+  els.inventoryOverviewList.innerHTML = "";
+  const keyword = els.inventorySearchInput.value.trim().toLowerCase();
+  const filteredProducts = products.filter((product) => {
+    if (!keyword) return true;
+    return [product.name, product.barcode, product.category]
+      .some((value) => String(value || "").toLowerCase().includes(keyword));
+  });
+  if (!filteredProducts.length) {
+    els.inventoryOverviewList.innerHTML = '<div class="empty">暂无库存资料</div>';
+    return;
+  }
+  for (const product of filteredProducts.slice(0, 50)) {
+    const branchText = branches
+      .map((branch) => `${branch.name}: ${getBranchStock(product, branch.id)}`)
+      .join(" · ");
+    const currentStock = getBranchStock(product, currentBranchId);
+    const row = document.createElement("div");
+    row.className = "management-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(product.name)}</strong>
+        <small>${escapeHtml(branchText)}</small>
+      </div>
+      <small>${escapeHtml(getBranchName(currentBranchId))} ${currentStock} · 总库存 ${Object.values(product.branchStock || {}).reduce((sum, stock) => sum + Number(stock || 0), 0)}</small>
+    `;
+    els.inventoryOverviewList.append(row);
+  }
 }
 
 function renderSettingsForm() {
@@ -1213,6 +1294,7 @@ function daysUntil(dateValue) {
 }
 
 function getFollowUpStatusText(sale) {
+  if (isSaleVoided(sale)) return "已作废";
   const status = sale.followUp?.status || "pending";
   if (status === "contacted") return "已联系";
   if (status === "completed") return "已完成";
@@ -1251,10 +1333,90 @@ function updateSaleFollowUp(saleId, status) {
   renderAll();
 }
 
+function isSaleVoided(sale) {
+  return sale.status === "voided";
+}
+
+function getSaleStatusText(sale) {
+  return isSaleVoided(sale) ? "已作废" : "正常";
+}
+
+function getActiveSales(source = sales) {
+  return source.filter((sale) => !isSaleVoided(sale));
+}
+
+function voidSale(saleId) {
+  if (!requireAdmin()) return;
+  const sale = sales.find((item) => item.id === saleId);
+  if (!sale || isSaleVoided(sale)) return;
+  if (!confirm(`确定作废订单 ${sale.id} 并回补库存吗？`)) return;
+  if (prompt("请输入 VOID 确认作废订单。") !== "VOID") {
+    alert("已取消作废。");
+    return;
+  }
+  const voidedAt = new Date().toISOString();
+  const actor = getCurrentActor();
+  const changedProducts = [];
+  products = products.map((product) => {
+    const sold = (sale.items || []).find((item) => item.id === product.id);
+    if (!sold) return product;
+    const beforeStock = getBranchStock(product, sale.branchId || "hq");
+    const afterStock = beforeStock + Number(sold.qty || 0);
+    const updatedProduct = setBranchStock(product, sale.branchId || "hq", afterStock);
+    changedProducts.push(updatedProduct);
+    const adjustment = {
+      id: `VOID${Date.now()}-${product.id}`,
+      createdAt: voidedAt,
+      productId: product.id,
+      productName: product.name,
+      barcode: product.barcode,
+      branchId: sale.branchId || "hq",
+      branchName: sale.branchName || getBranchName(sale.branchId || "hq"),
+      beforeStock,
+      afterStock,
+      delta: Number(sold.qty || 0),
+      reason: `订单作废回补 ${sale.id}`,
+      operator: actor
+    };
+    recordStockAdjustment(adjustment);
+    syncStockAdjustmentToCloud(adjustment);
+    return updatedProduct;
+  });
+  sales = sales.map((item) => item.id === saleId ? {
+    ...item,
+    status: "voided",
+    voidedAt,
+    voidedBy: actor,
+    syncStatus: "pending-update"
+  } : item);
+  const updatedSale = sales.find((item) => item.id === saleId);
+  pendingSales = pendingSales.filter((item) => item.id !== saleId);
+  save(STORAGE_KEYS.products, products);
+  save(STORAGE_KEYS.sales, sales);
+  savePendingSales();
+  for (const product of changedProducts) {
+    syncProductToCloud(product);
+  }
+  if (hasCloud() && navigator.onLine) {
+    window.cloudPOS.saveSale(updatedSale).catch((error) => {
+      console.warn("Void sale sync failed", error);
+      queuePendingSaleUpdate(updatedSale);
+    });
+  } else {
+    queuePendingSaleUpdate(updatedSale);
+  }
+  writeAuditLog("sale.void", {
+    saleId,
+    branchId: sale.branchId || "hq",
+    total: sale.total
+  });
+  renderAll();
+}
+
 function renderFollowUps() {
   if (!isAdmin()) return;
   els.followUpList.innerHTML = "";
-  const activePlans = sales
+  const activePlans = getActiveSales()
     .filter((sale) => sale.service?.endDate)
     .map((sale) => ({ ...sale, daysLeft: daysUntil(sale.service.endDate) }))
     .filter((sale) => sale.followUp?.status !== "completed")
@@ -1587,7 +1749,7 @@ function renderSales() {
     ].join(" ").toLowerCase();
     return haystack.includes(keyword);
   });
-  const total = selectedSales.reduce((sum, sale) => sum + sale.total, 0);
+  const total = selectedSales.reduce((sum, sale) => sum + (isSaleVoided(sale) ? 0 : sale.total), 0);
   els.salesSummary.textContent = selectedSales.length
     ? `${selectedSales.length} 单，共 ${money(total)}`
     : "暂无销售";
@@ -1595,23 +1757,33 @@ function renderSales() {
 
   if (!selectedSales.length) {
     els.salesList.innerHTML = '<div class="empty">完成收款后这里会出现销售记录</div>';
+    els.toggleSalesLimitBtn.classList.add("hidden");
     return;
   }
 
-  for (const sale of selectedSales.slice(0, 8)) {
+  const visibleSales = selectedSales.slice(0, showMoreSales ? 50 : 8);
+  els.toggleSalesLimitBtn.classList.toggle("hidden", selectedSales.length <= 8);
+  els.toggleSalesLimitBtn.textContent = showMoreSales ? "显示较少" : `显示更多（共 ${selectedSales.length} 笔）`;
+
+  for (const sale of visibleSales) {
     const row = document.createElement("div");
     row.className = "sale-item";
+    row.classList.toggle("voided", isSaleVoided(sale));
     row.innerHTML = `
       <div class="sale-item-top">
-        <strong>${money(sale.total)}</strong>
+        <strong>${isSaleVoided(sale) ? "已作废" : money(sale.total)}</strong>
         <span>${new Date(sale.createdAt).toLocaleTimeString()}</span>
       </div>
+      <span class="product-meta">状态：${getSaleStatusText(sale)}</span>
       <span class="product-meta">分行：${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))}</span>
       <span class="product-meta">收银员：${escapeHtml(sale.operator?.name || "-")}</span>
       <span class="product-meta">同步：${pendingSales.some((item) => item.id === sale.id) ? "待同步" : "已处理"}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
+      ${isAdmin() && !isSaleVoided(sale) ? '<button class="ghost danger" type="button" data-void-sale>作废并回补库存</button>' : ""}
     `;
+    const voidButton = row.querySelector("[data-void-sale]");
+    if (voidButton) voidButton.addEventListener("click", () => voidSale(sale.id));
     els.salesList.append(row);
   }
 }
@@ -1767,10 +1939,12 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
+      getSaleStatusText(sale),
+      sale.voidedAt ? new Date(sale.voidedAt).toLocaleString() : "",
       sale.branchName || getBranchName(sale.branchId || "hq"),
       sale.operator?.name || "",
       sale.operator?.email || "",
@@ -1809,21 +1983,21 @@ function downloadCsv(filename, rows) {
 function exportBranchSummary() {
   if (!requireAdmin()) return;
   const reportSales = getReportSales();
-  const rows = [["日期范围", "分行", "订单数", "客户数", "销售额"]];
+  const rows = [["日期范围", "统计口径", "分行", "订单数", "客户数", "销售额"]];
   for (const branch of branches) {
     const branchSales = reportSales.filter((sale) => (sale.branchId || "hq") === branch.id);
     const customers = new Set(branchSales.map((sale) => `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`).filter(Boolean));
     const revenue = branchSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-    rows.push([getReportRangeLabel(), branch.name, branchSales.length, customers.size, revenue]);
+    rows.push([getReportRangeLabel(), "不含已作废订单", branch.name, branchSales.length, customers.size, revenue]);
   }
   downloadCsv(`branch-summary-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 }
 
 function exportProductSales() {
   if (!requireAdmin()) return;
-  const rows = [["日期范围", "商品", "销量", "销售额"]];
+  const rows = [["日期范围", "统计口径", "商品", "销量", "销售额"]];
   for (const item of getProductSalesRows()) {
-    rows.push([getReportRangeLabel(), item.name, item.qty, item.revenue]);
+    rows.push([getReportRangeLabel(), "不含已作废订单", item.name, item.qty, item.revenue]);
   }
   if (rows.length === 1) {
     alert("当前日期范围还没有商品销售记录。");
@@ -1858,7 +2032,7 @@ function exportCustomers() {
   }
   const rows = [["客户姓名", "电话", "最近订单号", "最近分行", "最近消费时间", "计划名称", "计划开始", "计划结束", "到期状态", "跟进状态", "消费次数", "累计消费"]];
   const customerMap = new Map();
-  for (const sale of [...sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))) {
+  for (const sale of [...getActiveSales()].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))) {
     const key = `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`.trim() || sale.id;
     const existing = customerMap.get(key) || {
       latestSale: sale,
@@ -2121,13 +2295,23 @@ els.paidInput.addEventListener("input", () => {
 });
 els.salesDateInput.addEventListener("change", renderSales);
 els.salesSearchInput.addEventListener("input", renderSales);
+els.menuSearchInput.addEventListener("input", renderMenuProductList);
+els.inventorySearchInput.addEventListener("input", renderInventoryOverview);
+els.toggleSalesLimitBtn.addEventListener("click", () => {
+  showMoreSales = !showMoreSales;
+  renderSales();
+});
 els.todaySalesBtn.addEventListener("click", () => {
   els.salesDateInput.value = inputDate();
   renderSales();
 });
 els.quickCheckoutBtn.addEventListener("click", () => {
   setAppView("order");
-  if (cart.length) {
+  if (!isOperatorAllowedForCurrentBranch()) {
+    els.cashierMenu.classList.add("open");
+    els.cashierToggleBtn.setAttribute("aria-expanded", "true");
+    els.operatorEmailInput.focus();
+  } else if (cart.length) {
     checkout();
   } else {
     els.searchInput.focus();

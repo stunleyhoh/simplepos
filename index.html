@@ -216,6 +216,18 @@
           <button class="primary" type="submit">保存商品</button>
         </form>
 
+        <div class="panel-subsection" data-view-panel="menu">
+          <h3>现有菜单</h3>
+          <input id="menuSearchInput" type="search" placeholder="搜索菜单商品 / SKU / 分类">
+          <div id="menuProductList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection" data-view-panel="inventory">
+          <h3>库存总览</h3>
+          <input id="inventorySearchInput" type="search" placeholder="搜索库存商品 / SKU / 分类">
+          <div id="inventoryOverviewList" class="management-list"></div>
+        </div>
+
         <div class="admin-actions" data-view-panel="settings">
           <button id="initCloudBtn" class="ghost" type="button">初始化云端数据</button>
           <button id="syncPendingBtn" class="ghost" type="button">补传离线订单</button>
@@ -247,6 +259,7 @@
         <button id="todaySalesBtn" class="ghost" type="button">今天</button>
       </div>
       <div id="salesList" class="sales-list"></div>
+      <button id="toggleSalesLimitBtn" class="ghost hidden" type="button">显示更多</button>
     </section>
   </main>
 
