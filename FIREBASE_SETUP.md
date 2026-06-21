@@ -54,10 +54,10 @@
 3. 进入 `Sign-in method`。
 4. 找到 `Google`。
 5. 点击启用。
-6. Support email 选择你的邮箱：
+6. Support email 选择你的管理员邮箱：
 
    ```text
-   stanleyhoh79@gmail.com
+   你的管理员邮箱
    ```
 
 7. 点击 `Save`。
@@ -116,7 +116,7 @@ sales
 
 后续要做到：
 
-- 只有 `stanleyhoh79@gmail.com` 是总管理员。
+- 只有你设置的管理员邮箱是总管理员。
 - 管理员可以查看全部分行和全部订单。
 - 授权员工只能查看和收银自己所属分行。
 - 未授权邮箱即使 Google 登录成功，也不能进入 POS。
@@ -181,7 +181,7 @@ http://localhost:4173
 打开后：
 
 1. 点击 `Google 登录`。
-2. 选择 `stanleyhoh79@gmail.com`。
+2. 选择你的管理员邮箱。
 3. 顶部应该显示云端已连接。
 4. 管理员后台会自动打开。
 

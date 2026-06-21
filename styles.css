@@ -290,6 +290,13 @@ select {
   color: var(--text);
 }
 
+.small-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  text-decoration: none;
+}
+
 .danger {
   color: var(--danger);
 }
@@ -386,6 +393,18 @@ select {
   display: block;
   color: var(--muted);
   margin-top: 2px;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.row-actions .ghost {
+  min-height: 36px;
+  padding: 7px 10px;
 }
 
 .sales-list {

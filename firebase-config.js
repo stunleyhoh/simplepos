@@ -7,4 +7,4 @@ export const firebaseConfig = {
   appId: "YOUR_FIREBASE_APP_ID"
 };
 
-export const adminEmail = "stanleyhoh79@gmail.com";
+export const adminEmail = "YOUR_ADMIN_EMAIL";

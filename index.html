@@ -104,13 +104,13 @@
       <div class="panel-header">
         <div>
           <h2 id="adminTitle">后台管理</h2>
-          <p>唯一管理员：stanleyhoh79@gmail.com</p>
+          <p>唯一管理员：已隐藏</p>
         </div>
         <button id="adminLogoutBtn" class="ghost hidden" type="button">退出后台</button>
       </div>
 
       <form id="adminLoginForm" class="admin-login">
-        <input id="adminEmailInput" type="email" autocomplete="username" required placeholder="输入管理员邮箱">
+        <input id="adminEmailInput" type="email" autocomplete="username" required placeholder="输入管理员邮箱（不会显示）">
         <button class="primary" type="submit">进入后台</button>
         <button id="adminGoogleLoginBtn" class="ghost" type="button">Google 管理员登录</button>
         <p id="adminLoginMessage" class="form-message">商品管理、导出销售记录和清空数据仅管理员可用。</p>
@@ -149,6 +149,16 @@
         </div>
 
         <div class="panel-subsection">
+          <h3>热销商品</h3>
+          <div id="topProductsList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
+          <h3>每日销售趋势</h3>
+          <div id="dailyTrendList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
           <h3>同步状态</h3>
           <div id="syncOverview" class="management-list"></div>
         </div>
@@ -179,6 +189,7 @@
             <input id="businessNameInput" required placeholder="品牌 / 小票标题">
             <input id="defaultServiceNameInput" required placeholder="默认计划名称">
             <input id="serviceDaysInput" required type="number" min="1" step="1" placeholder="服务天数">
+            <input id="lowStockThresholdInput" required type="number" min="0" step="1" placeholder="低库存提醒阈值">
             <input id="receiptFooterInput" required placeholder="小票结尾">
             <button class="primary" type="submit">保存设置</button>
           </form>
@@ -218,6 +229,9 @@
           <button id="syncPendingBtn" class="ghost" type="button">补传离线订单</button>
           <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
           <button id="exportSummaryBtn" class="ghost" type="button">导出分行汇总</button>
+          <button id="exportProductSalesBtn" class="ghost" type="button">导出商品排行</button>
+          <button id="exportInventoryBtn" class="ghost" type="button">导出库存总表</button>
+          <button id="exportCustomersBtn" class="ghost" type="button">导出客户名单</button>
           <button id="exportAuditBtn" class="ghost" type="button">导出审计日志</button>
           <button id="exportStockBtn" class="ghost" type="button">导出库存流水</button>
           <button id="backupBtn" class="ghost" type="button">导出完整备份</button>
@@ -237,6 +251,7 @@
       </div>
       <div class="toolbar">
         <input id="salesDateInput" type="date" aria-label="销售日期">
+        <input id="salesSearchInput" placeholder="搜索客户 / 电话 / 订单号" aria-label="搜索销售记录">
         <button id="todaySalesBtn" class="ghost" type="button">今天</button>
       </div>
       <div id="salesList" class="sales-list"></div>

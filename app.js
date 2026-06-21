@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   authorizedUsers: "simple-herbal-pos-authorized-users",
   operatorEmail: "simple-herbal-pos-operator-email",
   pendingSales: "simple-herbal-pos-pending-sales",
+  pendingSaleUpdates: "simple-herbal-pos-pending-sale-updates",
   pendingProducts: "simple-herbal-pos-pending-products",
   pendingStockAdjustments: "simple-herbal-pos-pending-stock-adjustments",
   pendingAuditLogs: "simple-herbal-pos-pending-audit-logs",
@@ -15,20 +16,19 @@ const STORAGE_KEYS = {
   settings: "simple-herbal-pos-settings"
 };
 
-const ADMIN_EMAIL = "stanleyhoh79@gmail.com";
-const APP_VERSION = "v0.24";
+const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
+const APP_VERSION = "v0.29";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
   { id: "branch-2", name: "分行 2" }
 ];
-const defaultAuthorizedUsers = [
-  { id: "admin-user", name: "Stanley Hoh", email: ADMIN_EMAIL, branchId: "hq", role: "管理员" }
-];
+const defaultAuthorizedUsers = [];
 const defaultSettings = {
   businessName: "简单草本减脂计划",
   defaultServiceName: "简单草本减脂计划第一阶段",
   serviceDays: 21,
+  lowStockThreshold: 5,
   receiptFooter: "谢谢惠顾"
 };
 
@@ -43,6 +43,7 @@ let sales = load(STORAGE_KEYS.sales, []);
 let branches = load(STORAGE_KEYS.branches, defaultBranches);
 let authorizedUsers = load(STORAGE_KEYS.authorizedUsers, defaultAuthorizedUsers);
 let pendingSales = load(STORAGE_KEYS.pendingSales, []);
+let pendingSaleUpdates = load(STORAGE_KEYS.pendingSaleUpdates, []);
 let pendingProducts = load(STORAGE_KEYS.pendingProducts, []);
 let pendingStockAdjustments = load(STORAGE_KEYS.pendingStockAdjustments, []);
 let pendingAuditLogs = load(STORAGE_KEYS.pendingAuditLogs, []);
@@ -57,6 +58,7 @@ let operatorEmail = localStorage.getItem(STORAGE_KEYS.operatorEmail) || "";
 let cloudSessionActive = false;
 let currentCloudUser = null;
 let reportRangeInitialized = false;
+let autoFillPaid = true;
 
 const els = {
   networkStatus: document.querySelector("#networkStatus"),
@@ -104,6 +106,9 @@ const els = {
   syncPendingBtn: document.querySelector("#syncPendingBtn"),
   exportBtn: document.querySelector("#exportBtn"),
   exportSummaryBtn: document.querySelector("#exportSummaryBtn"),
+  exportProductSalesBtn: document.querySelector("#exportProductSalesBtn"),
+  exportInventoryBtn: document.querySelector("#exportInventoryBtn"),
+  exportCustomersBtn: document.querySelector("#exportCustomersBtn"),
   exportAuditBtn: document.querySelector("#exportAuditBtn"),
   exportStockBtn: document.querySelector("#exportStockBtn"),
   backupBtn: document.querySelector("#backupBtn"),
@@ -120,6 +125,8 @@ const els = {
   globalCustomersText: document.querySelector("#globalCustomersText"),
   globalStockText: document.querySelector("#globalStockText"),
   branchOverview: document.querySelector("#branchOverview"),
+  topProductsList: document.querySelector("#topProductsList"),
+  dailyTrendList: document.querySelector("#dailyTrendList"),
   syncOverview: document.querySelector("#syncOverview"),
   auditList: document.querySelector("#auditList"),
   stockAdjustmentList: document.querySelector("#stockAdjustmentList"),
@@ -129,6 +136,7 @@ const els = {
   businessNameInput: document.querySelector("#businessNameInput"),
   defaultServiceNameInput: document.querySelector("#defaultServiceNameInput"),
   serviceDaysInput: document.querySelector("#serviceDaysInput"),
+  lowStockThresholdInput: document.querySelector("#lowStockThresholdInput"),
   receiptFooterInput: document.querySelector("#receiptFooterInput"),
   branchForm: document.querySelector("#branchForm"),
   branchNameInput: document.querySelector("#branchNameInput"),
@@ -140,6 +148,7 @@ const els = {
   userList: document.querySelector("#userList"),
   salesSummary: document.querySelector("#salesSummary"),
   salesDateInput: document.querySelector("#salesDateInput"),
+  salesSearchInput: document.querySelector("#salesSearchInput"),
   todaySalesBtn: document.querySelector("#todaySalesBtn"),
   salesList: document.querySelector("#salesList"),
   receiptDialog: document.querySelector("#receiptDialog"),
@@ -167,7 +176,7 @@ function hasCloud() {
 }
 
 function updateCloudStatus(text, ok = false) {
-  const pendingCount = pendingSales.length + pendingProducts.length + pendingStockAdjustments.length + pendingAuditLogs.length;
+  const pendingCount = pendingSales.length + pendingSaleUpdates.length + pendingProducts.length + pendingStockAdjustments.length + pendingAuditLogs.length;
   const pendingText = pendingCount ? ` · 待同步 ${pendingCount}` : "";
   els.cloudStatus.textContent = `${text}${pendingText}`;
   els.cloudStatus.style.color = ok ? "#0f766e" : "#66756f";
@@ -188,6 +197,24 @@ function queuePendingSale(sale) {
 function markSaleSynced(saleId) {
   pendingSales = pendingSales.filter((sale) => sale.id !== saleId);
   savePendingSales();
+}
+
+function savePendingSaleUpdates() {
+  save(STORAGE_KEYS.pendingSaleUpdates, pendingSaleUpdates);
+}
+
+function queuePendingSaleUpdate(sale) {
+  pendingSaleUpdates = [
+    sale,
+    ...pendingSaleUpdates.filter((item) => item.id !== sale.id)
+  ];
+  savePendingSaleUpdates();
+  updateCloudStatus("订单更新待同步");
+}
+
+function markSaleUpdateSynced(saleId) {
+  pendingSaleUpdates = pendingSaleUpdates.filter((sale) => sale.id !== saleId);
+  savePendingSaleUpdates();
 }
 
 function savePendingProducts() {
@@ -286,11 +313,36 @@ async function writeAuditLog(action, detail = {}) {
 }
 
 function isAdmin() {
-  return adminEmail.toLowerCase() === ADMIN_EMAIL;
+  return Boolean(adminEmail);
 }
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+async function sha256Hex(value) {
+  const bytes = new TextEncoder().encode(value);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function isConfiguredAdminEmail(email) {
+  return sha256Hex(normalizeEmail(email)).then((hash) => hash === ADMIN_EMAIL_HASH);
+}
+
+function ensureAdminAuthorized(email) {
+  const normalized = normalizeEmail(email);
+  if (!authorizedUsers.some((user) => normalizeEmail(user.email) === normalized)) {
+    authorizedUsers.unshift({
+      id: "admin-user",
+      name: "管理员",
+      email: normalized,
+      branchId: "hq",
+      role: "管理员",
+      active: true
+    });
+    save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  }
 }
 
 function getBranchName(branchId) {
@@ -358,17 +410,16 @@ function cloneSampleProductsForBranches() {
 }
 
 function migrateManagementData() {
+  appSettings = { ...defaultSettings, ...appSettings };
   if (!branches.length) branches = structuredClone(defaultBranches);
   if (!authorizedUsers.length) authorizedUsers = structuredClone(defaultAuthorizedUsers);
-  if (!authorizedUsers.some((user) => normalizeEmail(user.email) === ADMIN_EMAIL)) {
-    authorizedUsers.unshift(structuredClone(defaultAuthorizedUsers[0]));
-  }
   if (!branches.some((branch) => branch.id === currentBranchId)) {
     currentBranchId = "hq";
     localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   }
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  save(STORAGE_KEYS.settings, appSettings);
 }
 
 function renderBranchSelect() {
@@ -393,8 +444,8 @@ function renderAdminAccess() {
   if (allowed) {
     els.adminLoginMessage.classList.remove("error");
     els.adminLoginMessage.textContent = isCloudAdmin()
-      ? `Google 管理员已授权：${ADMIN_EMAIL}`
-      : `本机管理员已授权：${ADMIN_EMAIL}`;
+      ? "Google 管理员已授权"
+      : "本机管理员已授权";
   }
 }
 
@@ -527,6 +578,22 @@ async function syncPendingSales() {
   updateCloudStatus("离线订单已同步", true);
 }
 
+async function syncPendingSaleUpdates() {
+  if (!pendingSaleUpdates.length || !hasCloud() || !navigator.onLine) return;
+  updateCloudStatus(`正在补传 ${pendingSaleUpdates.length} 个订单更新`);
+  for (const sale of [...pendingSaleUpdates].reverse()) {
+    try {
+      await window.cloudPOS.saveSale(sale);
+      markSaleUpdateSynced(sale.id);
+    } catch (error) {
+      updateCloudStatus("部分订单更新待同步");
+      console.warn("Pending sale update sync failed", error);
+      return;
+    }
+  }
+  updateCloudStatus("订单更新已同步", true);
+}
+
 async function syncProductToCloud(product) {
   if (!hasCloud() || !navigator.onLine) {
     queuePendingProduct(product);
@@ -616,6 +683,7 @@ async function syncPendingChanges() {
   await syncPendingStockAdjustments();
   await syncPendingAuditLogs();
   await syncPendingSales();
+  await syncPendingSaleUpdates();
 }
 
 async function initializeCloudData() {
@@ -727,6 +795,7 @@ async function saveSettings(event) {
     businessName: els.businessNameInput.value.trim(),
     defaultServiceName: els.defaultServiceNameInput.value.trim(),
     serviceDays: Math.max(1, Number(els.serviceDaysInput.value || 21)),
+    lowStockThreshold: Math.max(0, Number(els.lowStockThresholdInput.value || 5)),
     receiptFooter: els.receiptFooterInput.value.trim()
   };
   save(STORAGE_KEYS.settings, appSettings);
@@ -756,8 +825,9 @@ function applyCloudUser(appUser) {
     save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   }
 
-  if (normalizeEmail(appUser.email) === ADMIN_EMAIL || appUser.role === "admin") {
-    adminEmail = ADMIN_EMAIL;
+  if (appUser.role === "admin") {
+    adminEmail = normalizeEmail(appUser.email);
+    ensureAdminAuthorized(adminEmail);
     localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
   }
 
@@ -779,7 +849,7 @@ function requireAdmin() {
 }
 
 function isCloudAdmin() {
-  return currentCloudUser && (normalizeEmail(currentCloudUser.email) === ADMIN_EMAIL || currentCloudUser.role === "admin");
+  return currentCloudUser && currentCloudUser.role === "admin";
 }
 
 function requireCloudAdmin() {
@@ -788,15 +858,16 @@ function requireCloudAdmin() {
   return false;
 }
 
-function loginAdmin(event) {
+async function loginAdmin(event) {
   event.preventDefault();
   const email = normalizeEmail(els.adminEmailInput.value);
-  if (email !== ADMIN_EMAIL) {
+  if (!(await isConfiguredAdminEmail(email))) {
     els.adminLoginMessage.textContent = "邮箱不匹配，无法进入后台。";
     els.adminLoginMessage.classList.add("error");
     return;
   }
   adminEmail = email;
+  ensureAdminAuthorized(email);
   localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
   els.adminEmailInput.value = "";
   renderAdminAccess();
@@ -852,7 +923,7 @@ function renderManagementLists() {
         <strong>${escapeHtml(user.name)}</strong>
         <small>${escapeHtml(user.email)} · ${escapeHtml(getBranchName(user.branchId))} · ${escapeHtml(user.role || "POS用户")}</small>
       </div>
-      <button class="ghost danger" type="button" ${normalizeEmail(user.email) === ADMIN_EMAIL ? "disabled" : ""}>移除</button>
+      <button class="ghost danger" type="button" ${user.role === "管理员" || user.role === "admin" ? "disabled" : ""}>移除</button>
     `;
     const button = row.querySelector("button");
     button.addEventListener("click", () => removeAuthorizedUser(user.id));
@@ -864,8 +935,8 @@ function renderManagementLists() {
   syncRow.className = "management-row";
   syncRow.innerHTML = `
     <div>
-      <strong>${pendingSales.length} 单订单、${pendingProducts.length} 个库存、${pendingStockAdjustments.length} 条调整、${pendingAuditLogs.length} 条审计待同步</strong>
-      <small>${pendingSales.length || pendingProducts.length || pendingStockAdjustments.length || pendingAuditLogs.length ? "恢复网络后会自动补传，也可以手动补传。" : "所有本机变更已处理。"}</small>
+      <strong>${pendingSales.length} 单订单、${pendingSaleUpdates.length} 个订单更新、${pendingProducts.length} 个库存、${pendingStockAdjustments.length} 条调整、${pendingAuditLogs.length} 条审计待同步</strong>
+      <small>${pendingSales.length || pendingSaleUpdates.length || pendingProducts.length || pendingStockAdjustments.length || pendingAuditLogs.length ? "恢复网络后会自动补传，也可以手动补传。" : "所有本机变更已处理。"}</small>
     </div>
   `;
   els.syncOverview.append(syncRow);
@@ -955,12 +1026,12 @@ function removeAuthorizedUser(userId) {
   if (!requireAdmin()) return;
   const removedUser = authorizedUsers.find((user) => user.id === userId);
   authorizedUsers = authorizedUsers.map((user) => {
-    if (user.id !== userId || normalizeEmail(user.email) === ADMIN_EMAIL) return user;
+    if (user.id !== userId || user.role === "管理员" || user.role === "admin") return user;
     return { ...user, active: false };
   });
   if (!getOperator()) logoutOperator();
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
-  if (removedUser && normalizeEmail(removedUser.email) !== ADMIN_EMAIL) {
+  if (removedUser && removedUser.role !== "管理员" && removedUser.role !== "admin") {
     if (hasCloud()) {
       window.cloudPOS.saveAuthorizedUser({ ...removedUser, active: false }).catch((error) => console.warn("User deactivate sync failed", error));
     }
@@ -1033,6 +1104,36 @@ function getReportRangeLabel() {
   return `${endDate} 前`;
 }
 
+function getProductSalesRows(reportSales = getReportSales()) {
+  const productMap = new Map();
+  for (const sale of reportSales) {
+    for (const item of sale.items || []) {
+      const key = item.id || item.name;
+      const existing = productMap.get(key) || {
+        name: item.name,
+        qty: 0,
+        revenue: 0
+      };
+      existing.qty += Number(item.qty || 0);
+      existing.revenue += Number(item.price || 0) * Number(item.qty || 0);
+      productMap.set(key, existing);
+    }
+  }
+  return [...productMap.values()].sort((a, b) => b.revenue - a.revenue || b.qty - a.qty);
+}
+
+function getDailySalesRows(reportSales = getReportSales()) {
+  const dayMap = new Map();
+  for (const sale of reportSales) {
+    const day = inputDate(new Date(sale.createdAt));
+    const existing = dayMap.get(day) || { day, orders: 0, revenue: 0 };
+    existing.orders += 1;
+    existing.revenue += Number(sale.total || 0);
+    dayMap.set(day, existing);
+  }
+  return [...dayMap.values()].sort((a, b) => b.day.localeCompare(a.day));
+}
+
 function renderAll() {
   els.versionStatus.textContent = APP_VERSION;
   renderBranchSelect();
@@ -1055,6 +1156,7 @@ function renderSettingsForm() {
   els.businessNameInput.value = appSettings.businessName;
   els.defaultServiceNameInput.value = appSettings.defaultServiceName;
   els.serviceDaysInput.value = appSettings.serviceDays;
+  els.lowStockThresholdInput.value = appSettings.lowStockThreshold ?? 5;
   els.receiptFooterInput.value = appSettings.receiptFooter;
 }
 
@@ -1066,12 +1168,52 @@ function daysUntil(dateValue) {
   return Math.ceil((target - today) / 86400000);
 }
 
+function getFollowUpStatusText(sale) {
+  const status = sale.followUp?.status || "pending";
+  if (status === "contacted") return "已联系";
+  if (status === "completed") return "已完成";
+  return "待跟进";
+}
+
+function getFollowUpDueText(daysLeft) {
+  if (daysLeft < 0) return `已到期 ${Math.abs(daysLeft)} 天`;
+  if (daysLeft === 0) return "今天到期";
+  return `${daysLeft} 天后到期`;
+}
+
+function updateSaleFollowUp(saleId, status) {
+  if (!requireAdmin()) return;
+  const sale = sales.find((item) => item.id === saleId);
+  if (!sale) return;
+  const nextFollowUp = {
+    status,
+    updatedAt: new Date().toISOString(),
+    updatedBy: getCurrentActor()
+  };
+  sales = sales.map((item) => item.id === saleId ? { ...item, followUp: nextFollowUp } : item);
+  save(STORAGE_KEYS.sales, sales);
+  const updatedSale = sales.find((item) => item.id === saleId);
+  if (hasCloud() && navigator.onLine) {
+    window.cloudPOS.saveSale(updatedSale).catch((error) => console.warn("Follow-up sync failed", error));
+  } else {
+    queuePendingSaleUpdate(updatedSale);
+  }
+  writeAuditLog("followup.update", {
+    saleId,
+    customer: sale.customer?.name || "",
+    phone: sale.customer?.phone || "",
+    status
+  });
+  renderAll();
+}
+
 function renderFollowUps() {
   if (!isAdmin()) return;
   els.followUpList.innerHTML = "";
   const activePlans = sales
     .filter((sale) => sale.service?.endDate)
     .map((sale) => ({ ...sale, daysLeft: daysUntil(sale.service.endDate) }))
+    .filter((sale) => sale.followUp?.status !== "completed")
     .filter((sale) => sale.daysLeft >= -7)
     .sort((a, b) => a.daysLeft - b.daysLeft)
     .slice(0, 10);
@@ -1084,14 +1226,23 @@ function renderFollowUps() {
   for (const sale of activePlans) {
     const row = document.createElement("div");
     row.className = "management-row";
-    const status = sale.daysLeft < 0 ? `已到期 ${Math.abs(sale.daysLeft)} 天` : sale.daysLeft === 0 ? "今天到期" : `${sale.daysLeft} 天后到期`;
+    const dueStatus = getFollowUpDueText(sale.daysLeft);
+    const phone = sale.customer?.phone || "";
+    const whatsappNumber = phone.replace(/[^0-9]/g, "");
     row.innerHTML = `
       <div>
         <strong>${escapeHtml(sale.customer?.name || "未填写姓名")}</strong>
-        <small>${escapeHtml(sale.customer?.phone || "-")} · ${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))} · ${escapeHtml(status)}</small>
+        <small>${escapeHtml(phone || "-")} · ${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))} · ${escapeHtml(dueStatus)} · ${escapeHtml(getFollowUpStatusText(sale))}</small>
       </div>
-      <small>${money(sale.total)}</small>
+      <div class="row-actions">
+        ${whatsappNumber ? `<a class="ghost small-link" href="https://wa.me/${escapeHtml(whatsappNumber)}" target="_blank" rel="noopener">WhatsApp</a>` : ""}
+        <button class="ghost" type="button" data-followup="contacted">已联系</button>
+        <button class="ghost" type="button" data-followup="completed">已完成</button>
+      </div>
     `;
+    for (const button of row.querySelectorAll("[data-followup]")) {
+      button.addEventListener("click", () => updateSaleFollowUp(sale.id, button.dataset.followup));
+    }
     els.followUpList.append(row);
   }
 }
@@ -1100,10 +1251,11 @@ function renderLowStock() {
   if (!isAdmin()) return;
   els.lowStockList.innerHTML = "";
   const lowStockItems = [];
+  const threshold = Number(appSettings.lowStockThreshold ?? 5);
   for (const product of products) {
     for (const branch of branches) {
       const stock = getBranchStock(product, branch.id);
-      if (stock <= 5) {
+      if (stock <= threshold) {
         lowStockItems.push({ product, branch, stock });
       }
     }
@@ -1122,7 +1274,7 @@ function renderLowStock() {
         <strong>${escapeHtml(item.product.name)}</strong>
         <small>${escapeHtml(item.branch.name)} · SKU ${escapeHtml(item.product.barcode || "-")}</small>
       </div>
-      <small>库存 ${item.stock}</small>
+      <small>库存 ${item.stock} / 阈值 ${threshold}</small>
     `;
     els.lowStockList.append(row);
   }
@@ -1221,6 +1373,12 @@ function renderCart() {
     els.cartItems.append(row);
   }
 
+  if (!cart.length) {
+    els.paidInput.value = "";
+    autoFillPaid = true;
+  } else if (autoFillPaid) {
+    els.paidInput.value = getCartDueAmount().toFixed(2);
+  }
   const totals = getCartTotals();
   els.subtotalText.textContent = money(totals.subtotal);
   els.totalText.textContent = money(totals.total);
@@ -1243,9 +1401,15 @@ function updateCartQty(productId, nextQty) {
 function getCartTotals() {
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const discount = Math.max(0, Number(els.discountInput.value || 0));
-  const total = Math.max(0, subtotal - discount);
+  const total = getCartDueAmount();
   const paid = Number(els.paidInput.value || 0);
   return { subtotal, discount, total, paid, change: Math.max(0, paid - total) };
+}
+
+function getCartDueAmount() {
+  const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const discount = Math.max(0, Number(els.discountInput.value || 0));
+  return Math.max(0, subtotal - discount);
 }
 
 async function checkout() {
@@ -1305,6 +1469,7 @@ async function checkout() {
   els.customerPhoneInput.value = "";
   els.discountInput.value = "0";
   els.paidInput.value = "";
+  autoFillPaid = true;
   save(STORAGE_KEYS.products, products);
   save(STORAGE_KEYS.sales, sales);
   if (!hasCloud() || !window.cloudPOS.saveCheckout) {
@@ -1363,7 +1528,21 @@ function buildReceipt(sale) {
 function renderSales() {
   if (!els.salesDateInput.value) els.salesDateInput.value = inputDate();
   const selectedDate = els.salesDateInput.value;
-  const selectedSales = sales.filter((sale) => inputDate(new Date(sale.createdAt)) === selectedDate);
+  const keyword = els.salesSearchInput.value.trim().toLowerCase();
+  const selectedSales = sales.filter((sale) => {
+    const matchDate = inputDate(new Date(sale.createdAt)) === selectedDate;
+    if (!matchDate) return false;
+    if (!keyword) return true;
+    const haystack = [
+      sale.id,
+      sale.customer?.name,
+      sale.customer?.phone,
+      sale.branchName,
+      sale.operator?.name,
+      ...(sale.items || []).map((item) => item.name)
+    ].join(" ").toLowerCase();
+    return haystack.includes(keyword);
+  });
   const total = selectedSales.reduce((sum, sale) => sum + sale.total, 0);
   els.salesSummary.textContent = selectedSales.length
     ? `${selectedSales.length} 单，共 ${money(total)}`
@@ -1428,6 +1607,44 @@ function renderGlobalDashboard() {
     `;
     els.branchOverview.append(row);
   }
+
+  const productRows = getProductSalesRows(reportSales).slice(0, 8);
+  els.topProductsList.innerHTML = "";
+  if (!productRows.length) {
+    els.topProductsList.innerHTML = '<div class="empty">当前日期范围暂无商品销售</div>';
+  } else {
+    for (const item of productRows) {
+      const row = document.createElement("div");
+      row.className = "management-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(item.name)}</strong>
+          <small>销量 ${item.qty}</small>
+        </div>
+        <small>${money(item.revenue)}</small>
+      `;
+      els.topProductsList.append(row);
+    }
+  }
+
+  const dailyRows = getDailySalesRows(reportSales).slice(0, 10);
+  els.dailyTrendList.innerHTML = "";
+  if (!dailyRows.length) {
+    els.dailyTrendList.innerHTML = '<div class="empty">当前日期范围暂无每日趋势</div>';
+  } else {
+    for (const item of dailyRows) {
+      const row = document.createElement("div");
+      row.className = "management-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(item.day)}</strong>
+          <small>${item.orders} 单</small>
+        </div>
+        <small>${money(item.revenue)}</small>
+      `;
+      els.dailyTrendList.append(row);
+    }
+  }
 }
 
 function saveProduct(event) {
@@ -1484,7 +1701,7 @@ function saveProduct(event) {
     afterStock: getBranchStock(savedProduct, currentBranchId),
     delta: getBranchStock(savedProduct, currentBranchId) - previousStock,
     reason: sameBarcode ? "管理员调整库存" : "管理员新增商品",
-    operator: currentCloudUser || { email: adminEmail || ADMIN_EMAIL, name: "管理员" }
+    operator: currentCloudUser || { email: adminEmail || "", name: "管理员" }
   };
   recordStockAdjustment(adjustment);
   syncStockAdjustmentToCloud(adjustment);
@@ -1506,7 +1723,7 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
@@ -1517,6 +1734,8 @@ function exportSales() {
       new Date(sale.createdAt).toLocaleString(),
       sale.customer?.name || "",
       sale.customer?.phone || "",
+      getFollowUpStatusText(sale),
+      sale.followUp?.updatedAt ? new Date(sale.followUp.updatedAt).toLocaleString() : "",
       sale.service?.name || "",
       sale.service?.durationDays || "",
       sale.service?.startDate ? formatDate(new Date(sale.service.startDate)) : "",
@@ -1554,6 +1773,77 @@ function exportBranchSummary() {
     rows.push([getReportRangeLabel(), branch.name, branchSales.length, customers.size, revenue]);
   }
   downloadCsv(`branch-summary-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportProductSales() {
+  if (!requireAdmin()) return;
+  const rows = [["日期范围", "商品", "销量", "销售额"]];
+  for (const item of getProductSalesRows()) {
+    rows.push([getReportRangeLabel(), item.name, item.qty, item.revenue]);
+  }
+  if (rows.length === 1) {
+    alert("当前日期范围还没有商品销售记录。");
+    return;
+  }
+  downloadCsv(`product-sales-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportInventory() {
+  if (!requireAdmin()) return;
+  const rows = [["商品", "SKU", "分类", "售价", "分行", "库存"]];
+  for (const product of products) {
+    for (const branch of branches) {
+      rows.push([
+        product.name,
+        product.barcode || "",
+        product.category || "",
+        product.price,
+        branch.name,
+        getBranchStock(product, branch.id)
+      ]);
+    }
+  }
+  downloadCsv(`inventory-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportCustomers() {
+  if (!requireAdmin()) return;
+  if (!sales.length) {
+    alert("还没有客户资料可以导出。");
+    return;
+  }
+  const rows = [["客户姓名", "电话", "最近订单号", "最近分行", "最近消费时间", "计划名称", "计划开始", "计划结束", "到期状态", "跟进状态", "消费次数", "累计消费"]];
+  const customerMap = new Map();
+  for (const sale of [...sales].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))) {
+    const key = `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`.trim() || sale.id;
+    const existing = customerMap.get(key) || {
+      latestSale: sale,
+      orderCount: 0,
+      totalSpend: 0
+    };
+    existing.orderCount += 1;
+    existing.totalSpend += Number(sale.total || 0);
+    customerMap.set(key, existing);
+  }
+  for (const customer of customerMap.values()) {
+    const sale = customer.latestSale;
+    const daysLeft = sale.service?.endDate ? daysUntil(sale.service.endDate) : null;
+    rows.push([
+      sale.customer?.name || "",
+      sale.customer?.phone || "",
+      sale.id,
+      sale.branchName || getBranchName(sale.branchId || "hq"),
+      new Date(sale.createdAt).toLocaleString(),
+      sale.service?.name || "",
+      sale.service?.startDate ? formatDate(new Date(sale.service.startDate)) : "",
+      sale.service?.endDate ? formatDate(new Date(sale.service.endDate)) : "",
+      daysLeft === null ? "" : getFollowUpDueText(daysLeft),
+      getFollowUpStatusText(sale),
+      customer.orderCount,
+      customer.totalSpend
+    ]);
+  }
+  downloadCsv(`customers-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 }
 
 function exportAuditLogs() {
@@ -1610,6 +1900,7 @@ function exportBackup() {
     products,
     sales,
     pendingSales,
+    pendingSaleUpdates,
     pendingProducts,
     pendingStockAdjustments,
     pendingAuditLogs,
@@ -1642,6 +1933,7 @@ function restoreBackupFile(file) {
       products = backup.products;
       sales = backup.sales;
       pendingSales = Array.isArray(backup.pendingSales) ? backup.pendingSales : [];
+      pendingSaleUpdates = Array.isArray(backup.pendingSaleUpdates) ? backup.pendingSaleUpdates : [];
       pendingProducts = Array.isArray(backup.pendingProducts) ? backup.pendingProducts : [];
       pendingStockAdjustments = Array.isArray(backup.pendingStockAdjustments) ? backup.pendingStockAdjustments : [];
       pendingAuditLogs = Array.isArray(backup.pendingAuditLogs) ? backup.pendingAuditLogs : [];
@@ -1654,6 +1946,7 @@ function restoreBackupFile(file) {
       save(STORAGE_KEYS.products, products);
       save(STORAGE_KEYS.sales, sales);
       savePendingSales();
+      savePendingSaleUpdates();
       savePendingProducts();
       savePendingStockAdjustments();
       savePendingAuditLogs();
@@ -1698,15 +1991,21 @@ function updateNetworkStatus() {
 function resetAllData() {
   if (!requireAdmin()) return;
   if (!confirm("确定清空商品、销售记录和购物车吗？")) return;
+  if (prompt('请输入 RESET 确认清空本机数据。') !== "RESET") {
+    alert("已取消清空。");
+    return;
+  }
   products = cloneSampleProductsForBranches();
   sales = [];
   pendingSales = [];
+  pendingSaleUpdates = [];
   cart = [];
   branches = structuredClone(defaultBranches);
   authorizedUsers = structuredClone(defaultAuthorizedUsers);
   save(STORAGE_KEYS.products, products);
   save(STORAGE_KEYS.sales, sales);
   savePendingSales();
+  savePendingSaleUpdates();
   pendingProducts = [];
   pendingStockAdjustments = [];
   pendingAuditLogs = [];
@@ -1737,11 +2036,17 @@ els.googleLoginBtn.addEventListener("click", signInWithGoogle);
 els.operatorLogoutBtn.addEventListener("click", logoutOperator);
 els.clearCartBtn.addEventListener("click", () => {
   cart = [];
+  autoFillPaid = true;
+  els.paidInput.value = "";
   renderCart();
 });
 els.discountInput.addEventListener("input", renderCart);
-els.paidInput.addEventListener("input", renderCart);
+els.paidInput.addEventListener("input", () => {
+  autoFillPaid = false;
+  renderCart();
+});
 els.salesDateInput.addEventListener("change", renderSales);
+els.salesSearchInput.addEventListener("input", renderSales);
 els.todaySalesBtn.addEventListener("click", () => {
   els.salesDateInput.value = inputDate();
   renderSales();
@@ -1763,6 +2068,9 @@ els.initCloudBtn.addEventListener("click", initializeCloudData);
 els.syncPendingBtn.addEventListener("click", syncPendingChanges);
 els.exportBtn.addEventListener("click", exportSales);
 els.exportSummaryBtn.addEventListener("click", exportBranchSummary);
+els.exportProductSalesBtn.addEventListener("click", exportProductSales);
+els.exportInventoryBtn.addEventListener("click", exportInventory);
+els.exportCustomersBtn.addEventListener("click", exportCustomers);
 els.exportAuditBtn.addEventListener("click", exportAuditLogs);
 els.exportStockBtn.addEventListener("click", exportStockAdjustments);
 els.backupBtn.addEventListener("click", exportBackup);
