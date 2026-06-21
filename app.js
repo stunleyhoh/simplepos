@@ -2,14 +2,20 @@ const STORAGE_KEYS = {
   products: "simple-herbal-pos-products",
   sales: "simple-herbal-pos-sales",
   adminEmail: "simple-herbal-pos-admin-email",
-  branchId: "simple-herbal-pos-branch-id"
+  branchId: "simple-herbal-pos-branch-id",
+  branches: "simple-herbal-pos-branches",
+  authorizedUsers: "simple-herbal-pos-authorized-users",
+  operatorEmail: "simple-herbal-pos-operator-email"
 };
 
 const ADMIN_EMAIL = "stanleyhoh79@gmail.com";
-const BRANCHES = [
+const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
   { id: "branch-2", name: "分行 2" }
+];
+const defaultAuthorizedUsers = [
+  { id: "admin-user", name: "Stanley Hoh", email: ADMIN_EMAIL, branchId: "hq", role: "管理员" }
 ];
 
 const sampleProducts = [
@@ -20,14 +26,19 @@ const sampleProducts = [
 
 let products = load(STORAGE_KEYS.products, sampleProducts);
 let sales = load(STORAGE_KEYS.sales, []);
+let branches = load(STORAGE_KEYS.branches, defaultBranches);
+let authorizedUsers = load(STORAGE_KEYS.authorizedUsers, defaultAuthorizedUsers);
 let cart = [];
 let deferredInstallPrompt = null;
 let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
 let currentBranchId = localStorage.getItem(STORAGE_KEYS.branchId) || "hq";
+let operatorEmail = localStorage.getItem(STORAGE_KEYS.operatorEmail) || "";
 
 const els = {
   networkStatus: document.querySelector("#networkStatus"),
+  cloudStatus: document.querySelector("#cloudStatus"),
   branchStatus: document.querySelector("#branchStatus"),
+  operatorStatus: document.querySelector("#operatorStatus"),
   adminStatus: document.querySelector("#adminStatus"),
   installBtn: document.querySelector("#installBtn"),
   seedBtn: document.querySelector("#seedBtn"),
@@ -38,6 +49,11 @@ const els = {
   cartHint: document.querySelector("#cartHint"),
   cartItems: document.querySelector("#cartItems"),
   clearCartBtn: document.querySelector("#clearCartBtn"),
+  operatorLoginForm: document.querySelector("#operatorLoginForm"),
+  operatorEmailInput: document.querySelector("#operatorEmailInput"),
+  googleLoginBtn: document.querySelector("#googleLoginBtn"),
+  operatorLogoutBtn: document.querySelector("#operatorLogoutBtn"),
+  operatorMessage: document.querySelector("#operatorMessage"),
   customerNameInput: document.querySelector("#customerNameInput"),
   customerPhoneInput: document.querySelector("#customerPhoneInput"),
   discountInput: document.querySelector("#discountInput"),
@@ -48,6 +64,7 @@ const els = {
   checkoutBtn: document.querySelector("#checkoutBtn"),
   adminLoginForm: document.querySelector("#adminLoginForm"),
   adminEmailInput: document.querySelector("#adminEmailInput"),
+  adminGoogleLoginBtn: document.querySelector("#adminGoogleLoginBtn"),
   adminLoginMessage: document.querySelector("#adminLoginMessage"),
   adminLogoutBtn: document.querySelector("#adminLogoutBtn"),
   adminContent: document.querySelector("#adminContent"),
@@ -57,6 +74,7 @@ const els = {
   categoryInput: document.querySelector("#categoryInput"),
   priceInput: document.querySelector("#priceInput"),
   stockInput: document.querySelector("#stockInput"),
+  initCloudBtn: document.querySelector("#initCloudBtn"),
   exportBtn: document.querySelector("#exportBtn"),
   resetDataBtn: document.querySelector("#resetDataBtn"),
   globalRevenueText: document.querySelector("#globalRevenueText"),
@@ -64,6 +82,14 @@ const els = {
   globalCustomersText: document.querySelector("#globalCustomersText"),
   globalStockText: document.querySelector("#globalStockText"),
   branchOverview: document.querySelector("#branchOverview"),
+  branchForm: document.querySelector("#branchForm"),
+  branchNameInput: document.querySelector("#branchNameInput"),
+  branchList: document.querySelector("#branchList"),
+  userForm: document.querySelector("#userForm"),
+  userNameInput: document.querySelector("#userNameInput"),
+  userEmailInput: document.querySelector("#userEmailInput"),
+  userBranchSelect: document.querySelector("#userBranchSelect"),
+  userList: document.querySelector("#userList"),
   salesSummary: document.querySelector("#salesSummary"),
   salesList: document.querySelector("#salesList"),
   receiptDialog: document.querySelector("#receiptDialog"),
@@ -86,6 +112,15 @@ function save(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function hasCloud() {
+  return Boolean(window.cloudPOS);
+}
+
+function updateCloudStatus(text, ok = false) {
+  els.cloudStatus.textContent = text;
+  els.cloudStatus.style.color = ok ? "#0f766e" : "#66756f";
+}
+
 function isAdmin() {
   return adminEmail.toLowerCase() === ADMIN_EMAIL;
 }
@@ -95,7 +130,7 @@ function normalizeEmail(value) {
 }
 
 function getBranchName(branchId) {
-  return BRANCHES.find((branch) => branch.id === branchId)?.name || "未知分行";
+  return branches.find((branch) => branch.id === branchId)?.name || "未知分行";
 }
 
 function getBranchStock(product, branchId = currentBranchId) {
@@ -117,6 +152,12 @@ function setBranchStock(product, branchId, stock) {
   };
 }
 
+function createBranchStock(initialStock = 0, selectedBranchId = currentBranchId) {
+  return Object.fromEntries(
+    branches.map((branch) => [branch.id, branch.id === selectedBranchId ? Number(initialStock || 0) : 0])
+  );
+}
+
 function getTotalStock() {
   return products.reduce((sum, product) => {
     const branchStock = product.branchStock
@@ -128,28 +169,53 @@ function getTotalStock() {
 
 function migrateProductsForBranches() {
   products = products.map((product) => {
-    if (product.branchStock) return product;
+    if (product.branchStock) {
+      const nextStock = { ...product.branchStock };
+      for (const branch of branches) {
+        if (!Object.hasOwn(nextStock, branch.id)) nextStock[branch.id] = 0;
+      }
+      return { ...product, branchStock: nextStock };
+    }
     return {
       ...product,
-      branchStock: {
-        hq: Number(product.stock || 0),
-        "branch-1": Math.floor(Number(product.stock || 0) * 0.4),
-        "branch-2": Math.floor(Number(product.stock || 0) * 0.25)
-      }
+      branchStock: createBranchStock(product.stock, "hq")
     };
   });
   save(STORAGE_KEYS.products, products);
 }
 
+function cloneSampleProductsForBranches() {
+  return structuredClone(sampleProducts).map((product) => ({
+    ...product,
+    branchStock: Object.fromEntries(
+      branches.map((branch) => [branch.id, Number(product.branchStock?.[branch.id] || 0)])
+    )
+  }));
+}
+
+function migrateManagementData() {
+  if (!branches.length) branches = structuredClone(defaultBranches);
+  if (!authorizedUsers.length) authorizedUsers = structuredClone(defaultAuthorizedUsers);
+  if (!authorizedUsers.some((user) => normalizeEmail(user.email) === ADMIN_EMAIL)) {
+    authorizedUsers.unshift(structuredClone(defaultAuthorizedUsers[0]));
+  }
+  if (!branches.some((branch) => branch.id === currentBranchId)) {
+    currentBranchId = "hq";
+    localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+  }
+  save(STORAGE_KEYS.branches, branches);
+  save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+}
+
 function renderBranchSelect() {
   els.branchSelect.innerHTML = "";
-  for (const branch of BRANCHES) {
+  for (const branch of branches) {
     const option = document.createElement("option");
     option.value = branch.id;
     option.textContent = branch.name;
     els.branchSelect.append(option);
   }
-  els.branchSelect.value = BRANCHES.some((branch) => branch.id === currentBranchId) ? currentBranchId : "hq";
+  els.branchSelect.value = branches.some((branch) => branch.id === currentBranchId) ? currentBranchId : "hq";
   els.branchStatus.textContent = getBranchName(els.branchSelect.value);
 }
 
@@ -164,6 +230,164 @@ function renderAdminAccess() {
     els.adminLoginMessage.classList.remove("error");
     els.adminLoginMessage.textContent = `已授权：${ADMIN_EMAIL}`;
   }
+}
+
+function getOperator() {
+  const email = normalizeEmail(operatorEmail);
+  return authorizedUsers.find((user) => normalizeEmail(user.email) === email) || null;
+}
+
+function isOperatorAllowedForCurrentBranch() {
+  const operator = getOperator();
+  return Boolean(operator && operator.branchId === currentBranchId);
+}
+
+function renderOperatorAccess() {
+  const operator = getOperator();
+  const allowed = isOperatorAllowedForCurrentBranch();
+  els.operatorStatus.textContent = allowed
+    ? `收银：${operator.name}`
+    : operator
+      ? "收银分行不匹配"
+      : "POS未登录";
+  els.operatorStatus.style.color = allowed ? "#0f766e" : "#66756f";
+  els.operatorLogoutBtn.classList.toggle("hidden", !operator);
+  els.operatorMessage.classList.toggle("error", Boolean(operator && !allowed));
+  if (allowed) {
+    els.operatorMessage.textContent = `${operator.name} 已授权使用 ${getBranchName(operator.branchId)} POS。`;
+  } else if (operator) {
+    els.operatorMessage.textContent = `${operator.name} 只被授权使用 ${getBranchName(operator.branchId)}，请切换分行或退出。`;
+  } else {
+    els.operatorMessage.textContent = "请使用管理员授权的邮箱登录后收银。";
+  }
+}
+
+function requireOperator() {
+  if (isOperatorAllowedForCurrentBranch()) return true;
+  alert("请先使用当前分行已授权的邮箱登录 POS。");
+  els.operatorEmailInput.focus();
+  return false;
+}
+
+function loginOperator(event) {
+  event.preventDefault();
+  const email = normalizeEmail(els.operatorEmailInput.value);
+  const user = authorizedUsers.find((item) => normalizeEmail(item.email) === email);
+  if (!user) {
+    els.operatorMessage.textContent = "此邮箱还没有被管理员授权使用 POS。";
+    els.operatorMessage.classList.add("error");
+    return;
+  }
+  operatorEmail = user.email;
+  currentBranchId = user.branchId;
+  localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+  localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+  els.operatorEmailInput.value = "";
+  cart = [];
+  renderAll();
+}
+
+function logoutOperator() {
+  operatorEmail = "";
+  localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+  cart = [];
+  renderAll();
+}
+
+async function signInWithGoogle() {
+  if (!hasCloud()) {
+    alert("Firebase 尚未连接。请确认已联网，并通过 http://localhost 或 HTTPS 打开系统。");
+    return;
+  }
+  try {
+    updateCloudStatus("正在打开 Google 登录");
+    await window.cloudPOS.signInWithGoogle();
+  } catch (error) {
+    updateCloudStatus("Google 登录失败");
+    alert(`Google 登录失败：${error.message}`);
+  }
+}
+
+async function syncSaleToCloud(sale) {
+  if (!hasCloud() || !navigator.onLine) return false;
+  try {
+    await window.cloudPOS.saveSale(sale);
+    updateCloudStatus("云端已同步", true);
+    return true;
+  } catch (error) {
+    updateCloudStatus("云端同步失败");
+    console.warn("Cloud sync failed", error);
+    return false;
+  }
+}
+
+async function syncProductToCloud(product) {
+  if (!hasCloud() || !navigator.onLine) return false;
+  try {
+    await window.cloudPOS.saveProduct(product);
+    updateCloudStatus("商品已同步", true);
+    return true;
+  } catch (error) {
+    updateCloudStatus("商品同步失败");
+    console.warn("Product cloud sync failed", error);
+    return false;
+  }
+}
+
+async function initializeCloudData() {
+  if (!requireAdmin()) return;
+  if (!hasCloud()) {
+    alert("云端还没连接。请先用 Google 管理员登录。");
+    return;
+  }
+
+  try {
+    updateCloudStatus("正在初始化云端");
+    for (const branch of branches) {
+      await window.cloudPOS.saveBranch(branch);
+    }
+    for (const user of authorizedUsers) {
+      await window.cloudPOS.saveAuthorizedUser(user);
+    }
+    for (const product of products) {
+      await window.cloudPOS.saveProduct(product);
+    }
+    updateCloudStatus("云端初始化完成", true);
+    alert("云端数据初始化完成。");
+  } catch (error) {
+    updateCloudStatus("云端初始化失败");
+    alert(`云端初始化失败：${error.message}`);
+  }
+}
+
+function applyCloudUser(appUser) {
+  if (!appUser || appUser.active === false) {
+    updateCloudStatus("邮箱未授权");
+    return;
+  }
+
+  if (!authorizedUsers.some((user) => normalizeEmail(user.email) === normalizeEmail(appUser.email))) {
+    authorizedUsers.push({
+      id: appUser.id || appUser.email,
+      name: appUser.name || appUser.email,
+      email: appUser.email,
+      branchId: appUser.branchId || "hq",
+      role: appUser.role || "POS用户"
+    });
+    save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  }
+
+  if (normalizeEmail(appUser.email) === ADMIN_EMAIL || appUser.role === "admin") {
+    adminEmail = ADMIN_EMAIL;
+    localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+  }
+
+  operatorEmail = appUser.email;
+  currentBranchId = appUser.branchId || "hq";
+  localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+  localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+  updateCloudStatus(`云端已登录：${appUser.email}`, true);
+  renderAll();
 }
 
 function requireAdmin() {
@@ -196,6 +420,102 @@ function logoutAdmin() {
   renderAdminAccess();
 }
 
+function createSlug(value) {
+  return normalizeEmail(value)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 36) || `branch-${Date.now()}`;
+}
+
+function renderManagementLists() {
+  if (!isAdmin()) return;
+  els.userBranchSelect.innerHTML = "";
+  for (const branch of branches) {
+    const option = document.createElement("option");
+    option.value = branch.id;
+    option.textContent = branch.name;
+    els.userBranchSelect.append(option);
+  }
+
+  els.branchList.innerHTML = "";
+  for (const branch of branches) {
+    const row = document.createElement("div");
+    row.className = "management-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(branch.name)}</strong>
+        <small>${escapeHtml(branch.id)}</small>
+      </div>
+      <small>${authorizedUsers.filter((user) => user.branchId === branch.id).length} 位授权用户</small>
+    `;
+    els.branchList.append(row);
+  }
+
+  els.userList.innerHTML = "";
+  for (const user of authorizedUsers) {
+    const row = document.createElement("div");
+    row.className = "management-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(user.name)}</strong>
+        <small>${escapeHtml(user.email)} · ${escapeHtml(getBranchName(user.branchId))} · ${escapeHtml(user.role || "POS用户")}</small>
+      </div>
+      <button class="ghost danger" type="button" ${normalizeEmail(user.email) === ADMIN_EMAIL ? "disabled" : ""}>移除</button>
+    `;
+    const button = row.querySelector("button");
+    button.addEventListener("click", () => removeAuthorizedUser(user.id));
+    els.userList.append(row);
+  }
+}
+
+function addBranch(event) {
+  event.preventDefault();
+  if (!requireAdmin()) return;
+  const name = els.branchNameInput.value.trim();
+  const id = createSlug(name);
+  if (branches.some((branch) => branch.id === id || branch.name === name)) {
+    alert("这个分行已经存在。");
+    return;
+  }
+  branches.push({ id, name });
+  products = products.map((product) => setBranchStock(product, id, 0));
+  save(STORAGE_KEYS.branches, branches);
+  save(STORAGE_KEYS.products, products);
+  if (hasCloud()) window.cloudPOS.saveBranch({ id, name }).catch((error) => console.warn("Branch cloud sync failed", error));
+  els.branchForm.reset();
+  renderAll();
+}
+
+function addAuthorizedUser(event) {
+  event.preventDefault();
+  if (!requireAdmin()) return;
+  const email = normalizeEmail(els.userEmailInput.value);
+  if (authorizedUsers.some((user) => normalizeEmail(user.email) === email)) {
+    alert("这个邮箱已经被授权。");
+    return;
+  }
+  const user = {
+    id: createId(),
+    name: els.userNameInput.value.trim(),
+    email,
+    branchId: els.userBranchSelect.value,
+    role: "POS用户"
+  };
+  authorizedUsers.push(user);
+  save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  if (hasCloud()) window.cloudPOS.saveAuthorizedUser(user).catch((error) => console.warn("User cloud sync failed", error));
+  els.userForm.reset();
+  renderAll();
+}
+
+function removeAuthorizedUser(userId) {
+  if (!requireAdmin()) return;
+  authorizedUsers = authorizedUsers.filter((user) => user.id !== userId || normalizeEmail(user.email) === ADMIN_EMAIL);
+  if (!getOperator()) logoutOperator();
+  save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  renderAll();
+}
+
 function createId() {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -220,7 +540,9 @@ function renderAll() {
   renderCart();
   renderSales();
   renderGlobalDashboard();
+  renderManagementLists();
   renderAdminAccess();
+  renderOperatorAccess();
   updateNetworkStatus();
 }
 
@@ -344,8 +666,9 @@ function getCartTotals() {
   return { subtotal, discount, total, paid, change: Math.max(0, paid - total) };
 }
 
-function checkout() {
+async function checkout() {
   if (!cart.length) return;
+  if (!requireOperator()) return;
   const totals = getCartTotals();
   if (totals.paid < totals.total) {
     alert("实收金额不足。");
@@ -362,6 +685,7 @@ function checkout() {
     createdAt: createdAt.toISOString(),
     branchId: currentBranchId,
     branchName: getBranchName(currentBranchId),
+    operator: getOperator(),
     customer: {
       name: els.customerNameInput.value.trim(),
       phone: els.customerPhoneInput.value.trim()
@@ -393,6 +717,7 @@ function checkout() {
   els.paidInput.value = "";
   save(STORAGE_KEYS.products, products);
   save(STORAGE_KEYS.sales, sales);
+  syncSaleToCloud(sale);
   showReceipt(sale);
   renderAll();
 }
@@ -408,6 +733,7 @@ function buildReceipt(sale) {
     "简单草本减脂计划",
     `订单号：${sale.id}`,
     `分行：${sale.branchName || getBranchName(sale.branchId || "hq")}`,
+    `收银员：${sale.operator?.name || "-"}`,
     `时间：${new Date(sale.createdAt).toLocaleString()}`,
     `客户：${sale.customer?.name || "-"}`,
     `电话：${sale.customer?.phone || "-"}`,
@@ -450,6 +776,7 @@ function renderSales() {
         <span>${new Date(sale.createdAt).toLocaleTimeString()}</span>
       </div>
       <span class="product-meta">分行：${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))}</span>
+      <span class="product-meta">收银员：${escapeHtml(sale.operator?.name || "-")}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
     `;
@@ -472,7 +799,7 @@ function renderGlobalDashboard() {
   els.globalStockText.textContent = String(getTotalStock());
   els.branchOverview.innerHTML = "";
 
-  for (const branch of BRANCHES) {
+  for (const branch of branches) {
     const branchSales = sales.filter((sale) => (sale.branchId || "hq") === branch.id);
     const revenue = branchSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
     const branchCustomers = new Set(
@@ -502,12 +829,7 @@ function saveProduct(event) {
     category: els.categoryInput.value.trim(),
     price: Number(els.priceInput.value),
     stock: Number(els.stockInput.value),
-    branchStock: {
-      hq: currentBranchId === "hq" ? Number(els.stockInput.value) : 0,
-      "branch-1": 0,
-      "branch-2": 0,
-      [currentBranchId]: Number(els.stockInput.value)
-    }
+    branchStock: createBranchStock(els.stockInput.value, currentBranchId)
   };
   if (!product.name || !product.category || product.price < 0 || product.stock < 0) {
     alert("请检查商品信息。");
@@ -515,12 +837,29 @@ function saveProduct(event) {
   }
 
   const sameBarcode = product.barcode && products.find((item) => item.barcode === product.barcode);
+  let savedProduct = product;
   if (sameBarcode) {
-    products = products.map((item) => item.id === sameBarcode.id ? { ...product, id: item.id } : item);
+    products = products.map((item) => {
+      if (item.id !== sameBarcode.id) return item;
+      savedProduct = {
+        ...item,
+        name: product.name,
+        barcode: product.barcode,
+        category: product.category,
+        price: product.price,
+        stock: currentBranchId === "hq" ? product.stock : item.stock,
+        branchStock: {
+          ...(item.branchStock || {}),
+          [currentBranchId]: product.stock
+        }
+      };
+      return savedProduct;
+    });
   } else {
     products.unshift(product);
   }
   save(STORAGE_KEYS.products, products);
+  syncProductToCloud(savedProduct);
   els.productForm.reset();
   renderAll();
 }
@@ -531,11 +870,13 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "分行", "时间", "客户姓名", "电话", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "分行", "收银员", "收银员邮箱", "时间", "客户姓名", "电话", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
       sale.branchName || getBranchName(sale.branchId || "hq"),
+      sale.operator?.name || "",
+      sale.operator?.email || "",
       new Date(sale.createdAt).toLocaleString(),
       sale.customer?.name || "",
       sale.customer?.phone || "",
@@ -580,14 +921,15 @@ function updateNetworkStatus() {
 function resetAllData() {
   if (!requireAdmin()) return;
   if (!confirm("确定清空商品、销售记录和购物车吗？")) return;
-  products = structuredClone(sampleProducts).map((product) => ({
-    ...product,
-    branchStock: { ...product.branchStock }
-  }));
+  products = cloneSampleProductsForBranches();
   sales = [];
   cart = [];
+  branches = structuredClone(defaultBranches);
+  authorizedUsers = structuredClone(defaultAuthorizedUsers);
   save(STORAGE_KEYS.products, products);
   save(STORAGE_KEYS.sales, sales);
+  save(STORAGE_KEYS.branches, branches);
+  save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   renderAll();
 }
 
@@ -599,6 +941,9 @@ els.branchSelect.addEventListener("change", () => {
   cart = [];
   renderAll();
 });
+els.operatorLoginForm.addEventListener("submit", loginOperator);
+els.googleLoginBtn.addEventListener("click", signInWithGoogle);
+els.operatorLogoutBtn.addEventListener("click", logoutOperator);
 els.clearCartBtn.addEventListener("click", () => {
   cart = [];
   renderCart();
@@ -607,16 +952,17 @@ els.discountInput.addEventListener("input", renderCart);
 els.paidInput.addEventListener("input", renderCart);
 els.checkoutBtn.addEventListener("click", checkout);
 els.adminLoginForm.addEventListener("submit", loginAdmin);
+els.adminGoogleLoginBtn.addEventListener("click", signInWithGoogle);
 els.adminLogoutBtn.addEventListener("click", logoutAdmin);
+els.branchForm.addEventListener("submit", addBranch);
+els.userForm.addEventListener("submit", addAuthorizedUser);
 els.productForm.addEventListener("submit", saveProduct);
+els.initCloudBtn.addEventListener("click", initializeCloudData);
 els.exportBtn.addEventListener("click", exportSales);
 els.resetDataBtn.addEventListener("click", resetAllData);
 els.seedBtn.addEventListener("click", () => {
   if (!requireAdmin()) return;
-  products = structuredClone(sampleProducts).map((product) => ({
-    ...product,
-    branchStock: { ...product.branchStock }
-  }));
+  products = cloneSampleProductsForBranches();
   save(STORAGE_KEYS.products, products);
   renderAll();
 });
@@ -624,6 +970,24 @@ els.closeReceiptBtn.addEventListener("click", () => els.receiptDialog.close());
 els.printReceiptBtn.addEventListener("click", () => window.print());
 window.addEventListener("online", updateNetworkStatus);
 window.addEventListener("offline", updateNetworkStatus);
+
+window.addEventListener("cloud-ready", (event) => {
+  updateCloudStatus(`云端已连接：${event.detail.projectId}`, true);
+});
+
+window.addEventListener("cloud-auth-change", (event) => {
+  const { firebaseUser, appUser } = event.detail;
+  if (!firebaseUser) {
+    updateCloudStatus("云端未登录");
+    return;
+  }
+  applyCloudUser(appUser);
+});
+
+window.addEventListener("cloud-error", (event) => {
+  updateCloudStatus("云端错误");
+  console.warn("Cloud error", event.detail.message);
+});
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -645,5 +1009,6 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+migrateManagementData();
 migrateProductsForBranches();
 renderAll();

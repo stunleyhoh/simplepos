@@ -16,7 +16,9 @@
     </div>
     <div class="status-row">
       <span id="networkStatus" class="status">检测中</span>
+      <span id="cloudStatus" class="status">云端未连接</span>
       <span id="branchStatus" class="status">总店</span>
+      <span id="operatorStatus" class="status">POS未登录</span>
       <span id="adminStatus" class="status">后台未登录</span>
       <button id="installBtn" class="ghost hidden" type="button">安装到电脑</button>
     </div>
@@ -59,6 +61,14 @@
       <div id="cartItems" class="cart-items"></div>
 
       <div class="totals">
+        <form id="operatorLoginForm" class="operator-login">
+          <strong>POS 使用者</strong>
+          <input id="operatorEmailInput" type="email" autocomplete="username" required placeholder="授权用户邮箱">
+          <button class="primary" type="submit">登录收银</button>
+          <button id="googleLoginBtn" class="ghost" type="button">Google 登录</button>
+          <button id="operatorLogoutBtn" class="ghost hidden" type="button">退出收银</button>
+          <p id="operatorMessage" class="form-message">请使用管理员授权的邮箱登录后收银。</p>
+        </form>
         <div class="customer-box">
           <strong>客户资料</strong>
           <input id="customerNameInput" placeholder="客户姓名">
@@ -100,6 +110,7 @@
       <form id="adminLoginForm" class="admin-login">
         <input id="adminEmailInput" type="email" autocomplete="username" required placeholder="输入管理员邮箱">
         <button class="primary" type="submit">进入后台</button>
+        <button id="adminGoogleLoginBtn" class="ghost" type="button">Google 管理员登录</button>
         <p id="adminLoginMessage" class="form-message">商品管理、导出销售记录和清空数据仅管理员可用。</p>
       </form>
 
@@ -128,6 +139,26 @@
           <div id="branchOverview" class="branch-overview"></div>
         </div>
 
+        <div class="panel-subsection">
+          <h3>开设新分行</h3>
+          <form id="branchForm" class="branch-form">
+            <input id="branchNameInput" required placeholder="分行名称，例如：槟城分行">
+            <button class="primary" type="submit">新增分行</button>
+          </form>
+          <div id="branchList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
+          <h3>授权 POS 用户</h3>
+          <form id="userForm" class="user-form">
+            <input id="userNameInput" required placeholder="使用者姓名">
+            <input id="userEmailInput" required type="email" placeholder="使用者邮箱">
+            <select id="userBranchSelect" required aria-label="授权分行"></select>
+            <button class="primary" type="submit">授权使用</button>
+          </form>
+          <div id="userList" class="management-list"></div>
+        </div>
+
         <form id="productForm" class="product-form">
           <input id="nameInput" required placeholder="商品名称">
           <input id="barcodeInput" placeholder="条码 / SKU">
@@ -138,6 +169,7 @@
         </form>
 
         <div class="admin-actions">
+          <button id="initCloudBtn" class="ghost" type="button">初始化云端数据</button>
           <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
           <button id="resetDataBtn" class="ghost danger" type="button">清空全部数据</button>
         </div>
@@ -170,5 +202,6 @@
   </dialog>
 
   <script src="app.js"></script>
+  <script type="module" src="firebase-cloud.js"></script>
 </body>
 </html>

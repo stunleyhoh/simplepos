@@ -121,6 +121,9 @@ h2 {
 .toolbar,
 .product-form,
 .admin-login,
+.operator-login,
+.branch-form,
+.user-form,
 .admin-actions {
   display: flex;
   gap: 10px;
@@ -236,6 +239,17 @@ select {
   background: #fbfdfc;
 }
 
+.operator-login {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfdfc;
+}
+
+.operator-login strong {
+  flex: 1 1 100%;
+}
+
 .totals label {
   display: grid;
   gap: 6px;
@@ -279,7 +293,11 @@ select {
   flex: 1 1 150px;
 }
 
-.admin-login input {
+.admin-login input,
+.operator-login input,
+.branch-form input,
+.user-form input,
+.user-form select {
   flex: 1 1 240px;
 }
 
@@ -342,6 +360,26 @@ select {
   align-items: center;
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
+}
+
+.management-list {
+  display: grid;
+  gap: 8px;
+}
+
+.management-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.management-row small {
+  display: block;
+  color: var(--muted);
+  margin-top: 2px;
 }
 
 .sales-list {
