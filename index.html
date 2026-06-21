@@ -16,6 +16,7 @@
     </div>
     <div class="status-row">
       <span id="networkStatus" class="status">检测中</span>
+      <span id="branchStatus" class="status">总店</span>
       <span id="adminStatus" class="status">后台未登录</span>
       <button id="installBtn" class="ghost hidden" type="button">安装到电脑</button>
     </div>
@@ -35,6 +36,11 @@
         <input id="searchInput" type="search" placeholder="搜索商品名称或条码">
         <select id="categoryFilter" aria-label="按分类筛选">
           <option value="all">全部分类</option>
+        </select>
+        <select id="branchSelect" aria-label="当前分行">
+          <option value="hq">总店</option>
+          <option value="branch-1">分行 1</option>
+          <option value="branch-2">分行 2</option>
         </select>
       </div>
 
@@ -98,12 +104,36 @@
       </form>
 
       <div id="adminContent" class="hidden">
+        <div class="global-dashboard">
+          <div class="metric-card">
+            <span>全局销售额</span>
+            <strong id="globalRevenueText">RM 0.00</strong>
+          </div>
+          <div class="metric-card">
+            <span>全局订单</span>
+            <strong id="globalOrdersText">0</strong>
+          </div>
+          <div class="metric-card">
+            <span>客户数</span>
+            <strong id="globalCustomersText">0</strong>
+          </div>
+          <div class="metric-card">
+            <span>总库存</span>
+            <strong id="globalStockText">0</strong>
+          </div>
+        </div>
+
+        <div class="panel-subsection">
+          <h3>分行表现</h3>
+          <div id="branchOverview" class="branch-overview"></div>
+        </div>
+
         <form id="productForm" class="product-form">
           <input id="nameInput" required placeholder="商品名称">
           <input id="barcodeInput" placeholder="条码 / SKU">
           <input id="categoryInput" required placeholder="分类">
           <input id="priceInput" required type="number" min="0" step="0.01" placeholder="售价">
-          <input id="stockInput" required type="number" min="0" step="1" placeholder="库存">
+          <input id="stockInput" required type="number" min="0" step="1" placeholder="当前分行库存">
           <button class="primary" type="submit">保存商品</button>
         </form>
 

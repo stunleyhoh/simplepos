@@ -1,15 +1,21 @@
 const STORAGE_KEYS = {
   products: "simple-herbal-pos-products",
   sales: "simple-herbal-pos-sales",
-  adminEmail: "simple-herbal-pos-admin-email"
+  adminEmail: "simple-herbal-pos-admin-email",
+  branchId: "simple-herbal-pos-branch-id"
 };
 
 const ADMIN_EMAIL = "stanleyhoh79@gmail.com";
+const BRANCHES = [
+  { id: "hq", name: "总店" },
+  { id: "branch-1", name: "分行 1" },
+  { id: "branch-2", name: "分行 2" }
+];
 
 const sampleProducts = [
-  { id: createId(), name: "简单草本减脂计划第一阶段", barcode: "SLIM-P1-3W", category: "草本减脂计划", price: 150, stock: 30 },
-  { id: createId(), name: "第一阶段复购包", barcode: "SLIM-P1-REFILL", category: "草本减脂计划", price: 150, stock: 20 },
-  { id: createId(), name: "3星期跟进服务", barcode: "SLIM-COACH-3W", category: "服务", price: 0, stock: 99 }
+  { id: createId(), name: "简单草本减脂计划第一阶段", barcode: "SLIM-P1-3W", category: "草本减脂计划", price: 150, stock: 30, branchStock: { hq: 30, "branch-1": 12, "branch-2": 8 } },
+  { id: createId(), name: "第一阶段复购包", barcode: "SLIM-P1-REFILL", category: "草本减脂计划", price: 150, stock: 20, branchStock: { hq: 20, "branch-1": 8, "branch-2": 5 } },
+  { id: createId(), name: "3星期跟进服务", barcode: "SLIM-COACH-3W", category: "服务", price: 0, stock: 99, branchStock: { hq: 99, "branch-1": 99, "branch-2": 99 } }
 ];
 
 let products = load(STORAGE_KEYS.products, sampleProducts);
@@ -17,14 +23,17 @@ let sales = load(STORAGE_KEYS.sales, []);
 let cart = [];
 let deferredInstallPrompt = null;
 let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
+let currentBranchId = localStorage.getItem(STORAGE_KEYS.branchId) || "hq";
 
 const els = {
   networkStatus: document.querySelector("#networkStatus"),
+  branchStatus: document.querySelector("#branchStatus"),
   adminStatus: document.querySelector("#adminStatus"),
   installBtn: document.querySelector("#installBtn"),
   seedBtn: document.querySelector("#seedBtn"),
   searchInput: document.querySelector("#searchInput"),
   categoryFilter: document.querySelector("#categoryFilter"),
+  branchSelect: document.querySelector("#branchSelect"),
   productGrid: document.querySelector("#productGrid"),
   cartHint: document.querySelector("#cartHint"),
   cartItems: document.querySelector("#cartItems"),
@@ -50,6 +59,11 @@ const els = {
   stockInput: document.querySelector("#stockInput"),
   exportBtn: document.querySelector("#exportBtn"),
   resetDataBtn: document.querySelector("#resetDataBtn"),
+  globalRevenueText: document.querySelector("#globalRevenueText"),
+  globalOrdersText: document.querySelector("#globalOrdersText"),
+  globalCustomersText: document.querySelector("#globalCustomersText"),
+  globalStockText: document.querySelector("#globalStockText"),
+  branchOverview: document.querySelector("#branchOverview"),
   salesSummary: document.querySelector("#salesSummary"),
   salesList: document.querySelector("#salesList"),
   receiptDialog: document.querySelector("#receiptDialog"),
@@ -78,6 +92,65 @@ function isAdmin() {
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function getBranchName(branchId) {
+  return BRANCHES.find((branch) => branch.id === branchId)?.name || "未知分行";
+}
+
+function getBranchStock(product, branchId = currentBranchId) {
+  if (product.branchStock && Number.isFinite(Number(product.branchStock[branchId]))) {
+    return Number(product.branchStock[branchId]);
+  }
+  if (branchId === "hq") return Number(product.stock || 0);
+  return 0;
+}
+
+function setBranchStock(product, branchId, stock) {
+  return {
+    ...product,
+    stock: branchId === "hq" ? stock : product.stock,
+    branchStock: {
+      ...(product.branchStock || {}),
+      [branchId]: stock
+    }
+  };
+}
+
+function getTotalStock() {
+  return products.reduce((sum, product) => {
+    const branchStock = product.branchStock
+      ? Object.values(product.branchStock).reduce((total, value) => total + Number(value || 0), 0)
+      : Number(product.stock || 0);
+    return sum + branchStock;
+  }, 0);
+}
+
+function migrateProductsForBranches() {
+  products = products.map((product) => {
+    if (product.branchStock) return product;
+    return {
+      ...product,
+      branchStock: {
+        hq: Number(product.stock || 0),
+        "branch-1": Math.floor(Number(product.stock || 0) * 0.4),
+        "branch-2": Math.floor(Number(product.stock || 0) * 0.25)
+      }
+    };
+  });
+  save(STORAGE_KEYS.products, products);
+}
+
+function renderBranchSelect() {
+  els.branchSelect.innerHTML = "";
+  for (const branch of BRANCHES) {
+    const option = document.createElement("option");
+    option.value = branch.id;
+    option.textContent = branch.name;
+    els.branchSelect.append(option);
+  }
+  els.branchSelect.value = BRANCHES.some((branch) => branch.id === currentBranchId) ? currentBranchId : "hq";
+  els.branchStatus.textContent = getBranchName(els.branchSelect.value);
 }
 
 function renderAdminAccess() {
@@ -112,6 +185,7 @@ function loginAdmin(event) {
   localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
   els.adminEmailInput.value = "";
   renderAdminAccess();
+  renderGlobalDashboard();
 }
 
 function logoutAdmin() {
@@ -140,10 +214,12 @@ function formatDate(date) {
 }
 
 function renderAll() {
+  renderBranchSelect();
   renderCategoryFilter();
   renderProducts();
   renderCart();
   renderSales();
+  renderGlobalDashboard();
   renderAdminAccess();
   updateNetworkStatus();
 }
@@ -179,13 +255,14 @@ function renderProducts() {
   }
 
   for (const product of filtered) {
+    const branchStock = getBranchStock(product);
     const card = document.createElement("button");
     card.type = "button";
     card.className = "product-card";
-    card.disabled = product.stock <= 0;
+    card.disabled = branchStock <= 0;
     card.innerHTML = `
       <strong>${escapeHtml(product.name)}</strong>
-      <span class="product-meta">${escapeHtml(product.category)} · 库存 ${product.stock}</span>
+      <span class="product-meta">${escapeHtml(product.category)} · ${escapeHtml(getBranchName(currentBranchId))}库存 ${branchStock}</span>
       <span class="product-meta">条码 ${escapeHtml(product.barcode || "-")}</span>
       <span class="price">${money(product.price)}</span>
     `;
@@ -198,14 +275,14 @@ function addToCart(productId) {
   const product = products.find((item) => item.id === productId);
   const existing = cart.find((item) => item.id === productId);
   const currentQty = existing ? existing.qty : 0;
-  if (!product || currentQty >= product.stock) {
+  if (!product || currentQty >= getBranchStock(product)) {
     alert("库存不足，不能继续添加。");
     return;
   }
   if (existing) {
     existing.qty += 1;
   } else {
-    cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 });
+    cart.push({ id: product.id, name: product.name, price: product.price, qty: 1, branchId: currentBranchId });
   }
   renderCart();
 }
@@ -251,7 +328,7 @@ function updateCartQty(productId, nextQty) {
   const product = products.find((item) => item.id === productId);
   if (nextQty <= 0) {
     cart = cart.filter((item) => item.id !== productId);
-  } else if (product && nextQty <= product.stock) {
+  } else if (product && nextQty <= getBranchStock(product)) {
     cart = cart.map((item) => item.id === productId ? { ...item, qty: nextQty } : item);
   } else {
     alert("库存不足。");
@@ -283,6 +360,8 @@ function checkout() {
   const sale = {
     id: `POS${Date.now()}`,
     createdAt: createdAt.toISOString(),
+    branchId: currentBranchId,
+    branchName: getBranchName(currentBranchId),
     customer: {
       name: els.customerNameInput.value.trim(),
       phone: els.customerPhoneInput.value.trim()
@@ -303,7 +382,8 @@ function checkout() {
 
   products = products.map((product) => {
     const sold = cart.find((item) => item.id === product.id);
-    return sold ? { ...product, stock: product.stock - sold.qty } : product;
+    if (!sold) return product;
+    return setBranchStock(product, currentBranchId, getBranchStock(product) - sold.qty);
   });
   sales.unshift(sale);
   cart = [];
@@ -327,6 +407,7 @@ function buildReceipt(sale) {
   const lines = [
     "简单草本减脂计划",
     `订单号：${sale.id}`,
+    `分行：${sale.branchName || getBranchName(sale.branchId || "hq")}`,
     `时间：${new Date(sale.createdAt).toLocaleString()}`,
     `客户：${sale.customer?.name || "-"}`,
     `电话：${sale.customer?.phone || "-"}`,
@@ -368,10 +449,46 @@ function renderSales() {
         <strong>${money(sale.total)}</strong>
         <span>${new Date(sale.createdAt).toLocaleTimeString()}</span>
       </div>
+      <span class="product-meta">分行：${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
     `;
     els.salesList.append(row);
+  }
+}
+
+function renderGlobalDashboard() {
+  if (!isAdmin()) return;
+  const totalRevenue = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+  const customers = new Set(
+    sales
+      .map((sale) => `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`.trim())
+      .filter(Boolean)
+  );
+
+  els.globalRevenueText.textContent = money(totalRevenue);
+  els.globalOrdersText.textContent = String(sales.length);
+  els.globalCustomersText.textContent = String(customers.size);
+  els.globalStockText.textContent = String(getTotalStock());
+  els.branchOverview.innerHTML = "";
+
+  for (const branch of BRANCHES) {
+    const branchSales = sales.filter((sale) => (sale.branchId || "hq") === branch.id);
+    const revenue = branchSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const branchCustomers = new Set(
+      branchSales
+        .map((sale) => `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`.trim())
+        .filter(Boolean)
+    );
+    const row = document.createElement("div");
+    row.className = "branch-row";
+    row.innerHTML = `
+      <strong>${escapeHtml(branch.name)}</strong>
+      <span>销售额 ${money(revenue)}</span>
+      <span>订单 ${branchSales.length}</span>
+      <span>客户 ${branchCustomers.size}</span>
+    `;
+    els.branchOverview.append(row);
   }
 }
 
@@ -384,7 +501,13 @@ function saveProduct(event) {
     barcode: els.barcodeInput.value.trim(),
     category: els.categoryInput.value.trim(),
     price: Number(els.priceInput.value),
-    stock: Number(els.stockInput.value)
+    stock: Number(els.stockInput.value),
+    branchStock: {
+      hq: currentBranchId === "hq" ? Number(els.stockInput.value) : 0,
+      "branch-1": 0,
+      "branch-2": 0,
+      [currentBranchId]: Number(els.stockInput.value)
+    }
   };
   if (!product.name || !product.category || product.price < 0 || product.stock < 0) {
     alert("请检查商品信息。");
@@ -408,10 +531,11 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "时间", "客户姓名", "电话", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "分行", "时间", "客户姓名", "电话", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
+      sale.branchName || getBranchName(sale.branchId || "hq"),
       new Date(sale.createdAt).toLocaleString(),
       sale.customer?.name || "",
       sale.customer?.phone || "",
@@ -456,7 +580,10 @@ function updateNetworkStatus() {
 function resetAllData() {
   if (!requireAdmin()) return;
   if (!confirm("确定清空商品、销售记录和购物车吗？")) return;
-  products = structuredClone(sampleProducts);
+  products = structuredClone(sampleProducts).map((product) => ({
+    ...product,
+    branchStock: { ...product.branchStock }
+  }));
   sales = [];
   cart = [];
   save(STORAGE_KEYS.products, products);
@@ -466,6 +593,12 @@ function resetAllData() {
 
 els.searchInput.addEventListener("input", renderProducts);
 els.categoryFilter.addEventListener("change", renderProducts);
+els.branchSelect.addEventListener("change", () => {
+  currentBranchId = els.branchSelect.value;
+  localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+  cart = [];
+  renderAll();
+});
 els.clearCartBtn.addEventListener("click", () => {
   cart = [];
   renderCart();
@@ -480,7 +613,10 @@ els.exportBtn.addEventListener("click", exportSales);
 els.resetDataBtn.addEventListener("click", resetAllData);
 els.seedBtn.addEventListener("click", () => {
   if (!requireAdmin()) return;
-  products = structuredClone(sampleProducts);
+  products = structuredClone(sampleProducts).map((product) => ({
+    ...product,
+    branchStock: { ...product.branchStock }
+  }));
   save(STORAGE_KEYS.products, products);
   renderAll();
 });
@@ -509,4 +645,5 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+migrateProductsForBranches();
 renderAll();
