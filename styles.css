@@ -149,6 +149,10 @@ select {
   flex: 0 1 160px;
 }
 
+.report-toolbar {
+  margin-bottom: 14px;
+}
+
 .product-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));

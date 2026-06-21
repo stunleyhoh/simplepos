@@ -117,6 +117,13 @@
       </form>
 
       <div id="adminContent" class="hidden">
+        <div class="toolbar report-toolbar" aria-label="报表日期范围">
+          <input id="reportStartInput" type="date" aria-label="报表开始日期">
+          <input id="reportEndInput" type="date" aria-label="报表结束日期">
+          <button id="reportTodayBtn" class="ghost" type="button">今天</button>
+          <button id="reportMonthBtn" class="ghost" type="button">本月</button>
+          <button id="reportAllBtn" class="ghost" type="button">全部</button>
+        </div>
         <div class="global-dashboard">
           <div class="metric-card">
             <span>全局销售额</span>
@@ -149,6 +156,11 @@
         <div class="panel-subsection">
           <h3>最近审计</h3>
           <div id="auditList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
+          <h3>库存流水</h3>
+          <div id="stockAdjustmentList" class="management-list"></div>
         </div>
 
         <div class="panel-subsection">
@@ -206,6 +218,8 @@
           <button id="syncPendingBtn" class="ghost" type="button">补传离线订单</button>
           <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
           <button id="exportSummaryBtn" class="ghost" type="button">导出分行汇总</button>
+          <button id="exportAuditBtn" class="ghost" type="button">导出审计日志</button>
+          <button id="exportStockBtn" class="ghost" type="button">导出库存流水</button>
           <button id="backupBtn" class="ghost" type="button">导出完整备份</button>
           <button id="restoreBtn" class="ghost danger" type="button">从备份恢复</button>
           <input id="restoreInput" class="hidden" type="file" accept="application/json">

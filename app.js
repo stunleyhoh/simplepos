@@ -10,11 +10,13 @@ const STORAGE_KEYS = {
   pendingProducts: "simple-herbal-pos-pending-products",
   pendingStockAdjustments: "simple-herbal-pos-pending-stock-adjustments",
   pendingAuditLogs: "simple-herbal-pos-pending-audit-logs",
+  stockAdjustments: "simple-herbal-pos-stock-adjustments",
+  auditLogs: "simple-herbal-pos-local-audit-logs",
   settings: "simple-herbal-pos-settings"
 };
 
 const ADMIN_EMAIL = "stanleyhoh79@gmail.com";
-const APP_VERSION = "v0.23";
+const APP_VERSION = "v0.24";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -44,7 +46,8 @@ let pendingSales = load(STORAGE_KEYS.pendingSales, []);
 let pendingProducts = load(STORAGE_KEYS.pendingProducts, []);
 let pendingStockAdjustments = load(STORAGE_KEYS.pendingStockAdjustments, []);
 let pendingAuditLogs = load(STORAGE_KEYS.pendingAuditLogs, []);
-let localAuditLogs = load("simple-herbal-pos-local-audit-logs", []);
+let stockAdjustments = load(STORAGE_KEYS.stockAdjustments, []);
+let auditLogs = load(STORAGE_KEYS.auditLogs, []);
 let appSettings = load(STORAGE_KEYS.settings, defaultSettings);
 let cart = [];
 let deferredInstallPrompt = null;
@@ -53,6 +56,7 @@ let currentBranchId = localStorage.getItem(STORAGE_KEYS.branchId) || "hq";
 let operatorEmail = localStorage.getItem(STORAGE_KEYS.operatorEmail) || "";
 let cloudSessionActive = false;
 let currentCloudUser = null;
+let reportRangeInitialized = false;
 
 const els = {
   networkStatus: document.querySelector("#networkStatus"),
@@ -100,10 +104,17 @@ const els = {
   syncPendingBtn: document.querySelector("#syncPendingBtn"),
   exportBtn: document.querySelector("#exportBtn"),
   exportSummaryBtn: document.querySelector("#exportSummaryBtn"),
+  exportAuditBtn: document.querySelector("#exportAuditBtn"),
+  exportStockBtn: document.querySelector("#exportStockBtn"),
   backupBtn: document.querySelector("#backupBtn"),
   restoreBtn: document.querySelector("#restoreBtn"),
   restoreInput: document.querySelector("#restoreInput"),
   resetDataBtn: document.querySelector("#resetDataBtn"),
+  reportStartInput: document.querySelector("#reportStartInput"),
+  reportEndInput: document.querySelector("#reportEndInput"),
+  reportTodayBtn: document.querySelector("#reportTodayBtn"),
+  reportMonthBtn: document.querySelector("#reportMonthBtn"),
+  reportAllBtn: document.querySelector("#reportAllBtn"),
   globalRevenueText: document.querySelector("#globalRevenueText"),
   globalOrdersText: document.querySelector("#globalOrdersText"),
   globalCustomersText: document.querySelector("#globalCustomersText"),
@@ -111,6 +122,7 @@ const els = {
   branchOverview: document.querySelector("#branchOverview"),
   syncOverview: document.querySelector("#syncOverview"),
   auditList: document.querySelector("#auditList"),
+  stockAdjustmentList: document.querySelector("#stockAdjustmentList"),
   followUpList: document.querySelector("#followUpList"),
   lowStockList: document.querySelector("#lowStockList"),
   settingsForm: document.querySelector("#settingsForm"),
@@ -155,7 +167,7 @@ function hasCloud() {
 }
 
 function updateCloudStatus(text, ok = false) {
-  const pendingCount = pendingSales.length + pendingProducts.length + pendingStockAdjustments.length;
+  const pendingCount = pendingSales.length + pendingProducts.length + pendingStockAdjustments.length + pendingAuditLogs.length;
   const pendingText = pendingCount ? ` · 待同步 ${pendingCount}` : "";
   els.cloudStatus.textContent = `${text}${pendingText}`;
   els.cloudStatus.style.color = ok ? "#0f766e" : "#66756f";
@@ -214,6 +226,14 @@ function markStockAdjustmentSynced(adjustmentId) {
   savePendingStockAdjustments();
 }
 
+function recordStockAdjustment(adjustment) {
+  stockAdjustments = [
+    adjustment,
+    ...stockAdjustments.filter((item) => item.id !== adjustment.id)
+  ].slice(0, 500);
+  save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
+}
+
 function savePendingAuditLogs() {
   save(STORAGE_KEYS.pendingAuditLogs, pendingAuditLogs);
 }
@@ -245,9 +265,11 @@ async function writeAuditLog(action, detail = {}) {
     branchName: getBranchName(currentBranchId),
     createdAt: new Date().toISOString()
   };
-  localAuditLogs.unshift(log);
-  localAuditLogs = localAuditLogs.slice(0, 50);
-  save("simple-herbal-pos-local-audit-logs", localAuditLogs);
+  auditLogs = [
+    log,
+    ...auditLogs.filter((item) => item.id !== log.id)
+  ].slice(0, 500);
+  save(STORAGE_KEYS.auditLogs, auditLogs);
   if (!hasCloud() || !navigator.onLine) {
     queuePendingAuditLog(log);
     return false;
@@ -638,6 +660,16 @@ function normalizeCloudSales(cloudSales) {
     .filter((sale) => sale.id && sale.createdAt);
 }
 
+function normalizeCloudTimelineItems(items) {
+  return items
+    .map((item) => ({
+      ...item,
+      createdAt: item.createdAt?.toDate ? item.createdAt.toDate().toISOString() : item.createdAt
+    }))
+    .filter((item) => item.id && item.createdAt)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
 async function loadCloudData() {
   if (!hasCloud() || !navigator.onLine) return false;
   try {
@@ -665,6 +697,16 @@ async function loadCloudData() {
       const mergedSales = [...cloudSales, ...sales.filter((sale) => !cloudSales.some((item) => item.id === sale.id))];
       sales = mergedSales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       save(STORAGE_KEYS.sales, sales);
+    }
+    if ((data.stockAdjustments || []).length) {
+      const cloudAdjustments = normalizeCloudTimelineItems(data.stockAdjustments || []);
+      stockAdjustments = [...cloudAdjustments, ...stockAdjustments.filter((item) => !cloudAdjustments.some((cloudItem) => cloudItem.id === item.id))].slice(0, 500);
+      save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
+    }
+    if ((data.auditLogs || []).length) {
+      const cloudAuditLogs = normalizeCloudTimelineItems(data.auditLogs || []);
+      auditLogs = [...cloudAuditLogs, ...auditLogs.filter((item) => !cloudAuditLogs.some((cloudItem) => cloudItem.id === item.id))].slice(0, 500);
+      save(STORAGE_KEYS.auditLogs, auditLogs);
     }
     migrateManagementData();
     migrateProductsForBranches();
@@ -829,7 +871,7 @@ function renderManagementLists() {
   els.syncOverview.append(syncRow);
 
   els.auditList.innerHTML = "";
-  const auditRows = [...localAuditLogs].slice(0, 10);
+  const auditRows = [...auditLogs].slice(0, 10);
   if (!auditRows.length) {
     els.auditList.innerHTML = '<div class="empty">暂无审计记录</div>';
   } else {
@@ -844,6 +886,25 @@ function renderManagementLists() {
         <small>${escapeHtml(log.branchName || "-")}</small>
       `;
       els.auditList.append(row);
+    }
+  }
+
+  els.stockAdjustmentList.innerHTML = "";
+  const stockRows = [...stockAdjustments].slice(0, 10);
+  if (!stockRows.length) {
+    els.stockAdjustmentList.innerHTML = '<div class="empty">暂无库存流水</div>';
+  } else {
+    for (const adjustment of stockRows) {
+      const row = document.createElement("div");
+      row.className = "management-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(adjustment.productName || "-")}</strong>
+          <small>${new Date(adjustment.createdAt).toLocaleString()} · ${escapeHtml(adjustment.branchName || getBranchName(adjustment.branchId || "hq"))}</small>
+        </div>
+        <small>${Number(adjustment.beforeStock || 0)} → ${Number(adjustment.afterStock || 0)} (${Number(adjustment.delta || 0) >= 0 ? "+" : ""}${Number(adjustment.delta || 0)})</small>
+      `;
+      els.stockAdjustmentList.append(row);
     }
   }
 }
@@ -930,6 +991,46 @@ function inputDate(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function monthStartDate(date = new Date()) {
+  return inputDate(new Date(date.getFullYear(), date.getMonth(), 1));
+}
+
+function monthEndDate(date = new Date()) {
+  return inputDate(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+}
+
+function setReportRange(startDate, endDate) {
+  els.reportStartInput.value = startDate || "";
+  els.reportEndInput.value = endDate || "";
+  renderGlobalDashboard();
+}
+
+function ensureReportRange() {
+  if (reportRangeInitialized) return;
+  reportRangeInitialized = true;
+  setReportRange(monthStartDate(), monthEndDate());
+}
+
+function getReportSales() {
+  const startDate = els.reportStartInput.value;
+  const endDate = els.reportEndInput.value;
+  return sales.filter((sale) => {
+    const saleDate = inputDate(new Date(sale.createdAt));
+    if (startDate && saleDate < startDate) return false;
+    if (endDate && saleDate > endDate) return false;
+    return true;
+  });
+}
+
+function getReportRangeLabel() {
+  const startDate = els.reportStartInput.value;
+  const endDate = els.reportEndInput.value;
+  if (!startDate && !endDate) return "全部";
+  if (startDate && endDate) return `${startDate} 至 ${endDate}`;
+  if (startDate) return `${startDate} 起`;
+  return `${endDate} 前`;
 }
 
 function renderAll() {
@@ -1294,21 +1395,23 @@ function renderSales() {
 
 function renderGlobalDashboard() {
   if (!isAdmin()) return;
-  const totalRevenue = sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+  ensureReportRange();
+  const reportSales = getReportSales();
+  const totalRevenue = reportSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
   const customers = new Set(
-    sales
+    reportSales
       .map((sale) => `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`.trim())
       .filter(Boolean)
   );
 
   els.globalRevenueText.textContent = money(totalRevenue);
-  els.globalOrdersText.textContent = String(sales.length);
+  els.globalOrdersText.textContent = String(reportSales.length);
   els.globalCustomersText.textContent = String(customers.size);
   els.globalStockText.textContent = String(getTotalStock());
   els.branchOverview.innerHTML = "";
 
   for (const branch of branches) {
-    const branchSales = sales.filter((sale) => (sale.branchId || "hq") === branch.id);
+    const branchSales = reportSales.filter((sale) => (sale.branchId || "hq") === branch.id);
     const revenue = branchSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
     const branchCustomers = new Set(
       branchSales
@@ -1383,6 +1486,7 @@ function saveProduct(event) {
     reason: sameBarcode ? "管理员调整库存" : "管理员新增商品",
     operator: currentCloudUser || { email: adminEmail || ADMIN_EMAIL, name: "管理员" }
   };
+  recordStockAdjustment(adjustment);
   syncStockAdjustmentToCloud(adjustment);
   writeAuditLog("product.save", {
     productId: savedProduct.id,
@@ -1441,14 +1545,59 @@ function downloadCsv(filename, rows) {
 
 function exportBranchSummary() {
   if (!requireAdmin()) return;
-  const rows = [["分行", "订单数", "客户数", "销售额"]];
+  const reportSales = getReportSales();
+  const rows = [["日期范围", "分行", "订单数", "客户数", "销售额"]];
   for (const branch of branches) {
-    const branchSales = sales.filter((sale) => (sale.branchId || "hq") === branch.id);
+    const branchSales = reportSales.filter((sale) => (sale.branchId || "hq") === branch.id);
     const customers = new Set(branchSales.map((sale) => `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`).filter(Boolean));
     const revenue = branchSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-    rows.push([branch.name, branchSales.length, customers.size, revenue]);
+    rows.push([getReportRangeLabel(), branch.name, branchSales.length, customers.size, revenue]);
   }
   downloadCsv(`branch-summary-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportAuditLogs() {
+  if (!requireAdmin()) return;
+  if (!auditLogs.length) {
+    alert("还没有审计日志可以导出。");
+    return;
+  }
+  const rows = [["时间", "动作", "操作者", "操作者邮箱", "分行", "详情"]];
+  for (const log of auditLogs) {
+    rows.push([
+      new Date(log.createdAt).toLocaleString(),
+      log.action,
+      log.actor?.name || "",
+      log.actor?.email || "",
+      log.branchName || getBranchName(log.branchId || "hq"),
+      JSON.stringify(log.detail || {})
+    ]);
+  }
+  downloadCsv(`audit-logs-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportStockAdjustments() {
+  if (!requireAdmin()) return;
+  if (!stockAdjustments.length) {
+    alert("还没有库存流水可以导出。");
+    return;
+  }
+  const rows = [["时间", "商品", "SKU", "分行", "调整前", "调整后", "变化", "原因", "操作者", "操作者邮箱"]];
+  for (const adjustment of stockAdjustments) {
+    rows.push([
+      new Date(adjustment.createdAt).toLocaleString(),
+      adjustment.productName || "",
+      adjustment.barcode || "",
+      adjustment.branchName || getBranchName(adjustment.branchId || "hq"),
+      adjustment.beforeStock,
+      adjustment.afterStock,
+      adjustment.delta,
+      adjustment.reason || "",
+      adjustment.operator?.name || "",
+      adjustment.operator?.email || ""
+    ]);
+  }
+  downloadCsv(`stock-adjustments-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 }
 
 function exportBackup() {
@@ -1463,7 +1612,9 @@ function exportBackup() {
     pendingSales,
     pendingProducts,
     pendingStockAdjustments,
-    pendingAuditLogs
+    pendingAuditLogs,
+    stockAdjustments,
+    auditLogs
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -1494,6 +1645,8 @@ function restoreBackupFile(file) {
       pendingProducts = Array.isArray(backup.pendingProducts) ? backup.pendingProducts : [];
       pendingStockAdjustments = Array.isArray(backup.pendingStockAdjustments) ? backup.pendingStockAdjustments : [];
       pendingAuditLogs = Array.isArray(backup.pendingAuditLogs) ? backup.pendingAuditLogs : [];
+      stockAdjustments = Array.isArray(backup.stockAdjustments) ? backup.stockAdjustments : [];
+      auditLogs = Array.isArray(backup.auditLogs) ? backup.auditLogs : [];
       appSettings = backup.settings || defaultSettings;
 
       save(STORAGE_KEYS.branches, branches);
@@ -1504,6 +1657,8 @@ function restoreBackupFile(file) {
       savePendingProducts();
       savePendingStockAdjustments();
       savePendingAuditLogs();
+      save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
+      save(STORAGE_KEYS.auditLogs, auditLogs);
       save(STORAGE_KEYS.settings, appSettings);
       migrateManagementData();
       migrateProductsForBranches();
@@ -1555,9 +1710,13 @@ function resetAllData() {
   pendingProducts = [];
   pendingStockAdjustments = [];
   pendingAuditLogs = [];
+  stockAdjustments = [];
+  auditLogs = [];
   savePendingProducts();
   savePendingStockAdjustments();
   savePendingAuditLogs();
+  save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
+  save(STORAGE_KEYS.auditLogs, auditLogs);
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   writeAuditLog("data.reset", {});
@@ -1587,6 +1746,11 @@ els.todaySalesBtn.addEventListener("click", () => {
   els.salesDateInput.value = inputDate();
   renderSales();
 });
+els.reportStartInput.addEventListener("change", renderGlobalDashboard);
+els.reportEndInput.addEventListener("change", renderGlobalDashboard);
+els.reportTodayBtn.addEventListener("click", () => setReportRange(inputDate(), inputDate()));
+els.reportMonthBtn.addEventListener("click", () => setReportRange(monthStartDate(), monthEndDate()));
+els.reportAllBtn.addEventListener("click", () => setReportRange("", ""));
 els.checkoutBtn.addEventListener("click", checkout);
 els.adminLoginForm.addEventListener("submit", loginAdmin);
 els.adminGoogleLoginBtn.addEventListener("click", signInWithGoogle);
@@ -1599,6 +1763,8 @@ els.initCloudBtn.addEventListener("click", initializeCloudData);
 els.syncPendingBtn.addEventListener("click", syncPendingChanges);
 els.exportBtn.addEventListener("click", exportSales);
 els.exportSummaryBtn.addEventListener("click", exportBranchSummary);
+els.exportAuditBtn.addEventListener("click", exportAuditLogs);
+els.exportStockBtn.addEventListener("click", exportStockAdjustments);
 els.backupBtn.addEventListener("click", exportBackup);
 els.restoreBtn.addEventListener("click", () => els.restoreInput.click());
 els.restoreInput.addEventListener("change", () => {

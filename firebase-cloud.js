@@ -73,17 +73,19 @@ async function loadCollection(name) {
 }
 
 async function loadAllData() {
-  const [branches, users, products, sales] = await Promise.all([
+  const [branches, users, products, sales, stockAdjustments, auditLogs] = await Promise.all([
     loadCollection("branches"),
     loadCollection("users"),
     loadCollection("products"),
-    loadCollection("sales")
+    loadCollection("sales"),
+    loadCollection("stockAdjustments"),
+    loadCollection("auditLogs")
   ]);
-  return { branches, users, products, sales };
+  return { branches, users, products, sales, stockAdjustments, auditLogs };
 }
 
 async function loadUserData(appUser) {
-  if (!appUser) return { branches: [], users: [], products: [], sales: [] };
+  if (!appUser) return { branches: [], users: [], products: [], sales: [], stockAdjustments: [], auditLogs: [] };
   if (appUser.role === "admin" || normalizeEmail(appUser.email) === adminEmail) {
     return loadAllData();
   }
@@ -97,7 +99,9 @@ async function loadUserData(appUser) {
     branches,
     users: [appUser],
     products,
-    sales: salesSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+    sales: salesSnapshot.docs.map((item) => ({ id: item.id, ...item.data() })),
+    stockAdjustments: [],
+    auditLogs: []
   };
 }
 
