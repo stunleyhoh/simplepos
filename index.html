@@ -16,6 +16,7 @@
     </div>
     <div class="status-row">
       <span id="networkStatus" class="status">检测中</span>
+      <span id="adminStatus" class="status">后台未登录</span>
       <button id="installBtn" class="ghost hidden" type="button">安装到电脑</button>
     </div>
   </header>
@@ -52,6 +53,11 @@
       <div id="cartItems" class="cart-items"></div>
 
       <div class="totals">
+        <div class="customer-box">
+          <strong>客户资料</strong>
+          <input id="customerNameInput" placeholder="客户姓名">
+          <input id="customerPhoneInput" placeholder="电话 / WhatsApp">
+        </div>
         <label>
           折扣
           <input id="discountInput" type="number" min="0" step="0.01" value="0">
@@ -79,23 +85,32 @@
     <section class="panel admin-panel" aria-labelledby="adminTitle">
       <div class="panel-header">
         <div>
-          <h2 id="adminTitle">商品管理</h2>
-          <p>数据保存在这台设备的浏览器里</p>
+          <h2 id="adminTitle">后台管理</h2>
+          <p>唯一管理员：stanleyhoh79@gmail.com</p>
         </div>
+        <button id="adminLogoutBtn" class="ghost hidden" type="button">退出后台</button>
       </div>
 
-      <form id="productForm" class="product-form">
-        <input id="nameInput" required placeholder="商品名称">
-        <input id="barcodeInput" placeholder="条码 / SKU">
-        <input id="categoryInput" required placeholder="分类">
-        <input id="priceInput" required type="number" min="0" step="0.01" placeholder="售价">
-        <input id="stockInput" required type="number" min="0" step="1" placeholder="库存">
-        <button class="primary" type="submit">保存商品</button>
+      <form id="adminLoginForm" class="admin-login">
+        <input id="adminEmailInput" type="email" autocomplete="username" required placeholder="输入管理员邮箱">
+        <button class="primary" type="submit">进入后台</button>
+        <p id="adminLoginMessage" class="form-message">商品管理、导出销售记录和清空数据仅管理员可用。</p>
       </form>
 
-      <div class="admin-actions">
-        <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
-        <button id="resetDataBtn" class="ghost danger" type="button">清空全部数据</button>
+      <div id="adminContent" class="hidden">
+        <form id="productForm" class="product-form">
+          <input id="nameInput" required placeholder="商品名称">
+          <input id="barcodeInput" placeholder="条码 / SKU">
+          <input id="categoryInput" required placeholder="分类">
+          <input id="priceInput" required type="number" min="0" step="0.01" placeholder="售价">
+          <input id="stockInput" required type="number" min="0" step="1" placeholder="库存">
+          <button class="primary" type="submit">保存商品</button>
+        </form>
+
+        <div class="admin-actions">
+          <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
+          <button id="resetDataBtn" class="ghost danger" type="button">清空全部数据</button>
+        </div>
       </div>
     </section>
 

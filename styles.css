@@ -120,6 +120,7 @@ h2 {
 
 .toolbar,
 .product-form,
+.admin-login,
 .admin-actions {
   display: flex;
   gap: 10px;
@@ -222,6 +223,15 @@ select {
   padding-top: 16px;
 }
 
+.customer-box {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfdfc;
+}
+
 .totals label {
   display: grid;
   gap: 6px;
@@ -263,6 +273,20 @@ select {
 
 .product-form input {
   flex: 1 1 150px;
+}
+
+.admin-login input {
+  flex: 1 1 240px;
+}
+
+.form-message {
+  flex: 1 1 100%;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.form-message.error {
+  color: var(--danger);
 }
 
 .sales-list {

@@ -1,7 +1,10 @@
 const STORAGE_KEYS = {
   products: "simple-herbal-pos-products",
-  sales: "simple-herbal-pos-sales"
+  sales: "simple-herbal-pos-sales",
+  adminEmail: "simple-herbal-pos-admin-email"
 };
+
+const ADMIN_EMAIL = "stanleyhoh79@gmail.com";
 
 const sampleProducts = [
   { id: createId(), name: "简单草本减脂计划第一阶段", barcode: "SLIM-P1-3W", category: "草本减脂计划", price: 150, stock: 30 },
@@ -13,9 +16,11 @@ let products = load(STORAGE_KEYS.products, sampleProducts);
 let sales = load(STORAGE_KEYS.sales, []);
 let cart = [];
 let deferredInstallPrompt = null;
+let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
 
 const els = {
   networkStatus: document.querySelector("#networkStatus"),
+  adminStatus: document.querySelector("#adminStatus"),
   installBtn: document.querySelector("#installBtn"),
   seedBtn: document.querySelector("#seedBtn"),
   searchInput: document.querySelector("#searchInput"),
@@ -24,12 +29,19 @@ const els = {
   cartHint: document.querySelector("#cartHint"),
   cartItems: document.querySelector("#cartItems"),
   clearCartBtn: document.querySelector("#clearCartBtn"),
+  customerNameInput: document.querySelector("#customerNameInput"),
+  customerPhoneInput: document.querySelector("#customerPhoneInput"),
   discountInput: document.querySelector("#discountInput"),
   paidInput: document.querySelector("#paidInput"),
   subtotalText: document.querySelector("#subtotalText"),
   totalText: document.querySelector("#totalText"),
   changeText: document.querySelector("#changeText"),
   checkoutBtn: document.querySelector("#checkoutBtn"),
+  adminLoginForm: document.querySelector("#adminLoginForm"),
+  adminEmailInput: document.querySelector("#adminEmailInput"),
+  adminLoginMessage: document.querySelector("#adminLoginMessage"),
+  adminLogoutBtn: document.querySelector("#adminLogoutBtn"),
+  adminContent: document.querySelector("#adminContent"),
   productForm: document.querySelector("#productForm"),
   nameInput: document.querySelector("#nameInput"),
   barcodeInput: document.querySelector("#barcodeInput"),
@@ -60,6 +72,56 @@ function save(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function isAdmin() {
+  return adminEmail.toLowerCase() === ADMIN_EMAIL;
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function renderAdminAccess() {
+  const allowed = isAdmin();
+  els.adminStatus.textContent = allowed ? "后台管理员" : "后台未登录";
+  els.adminStatus.style.color = allowed ? "#0f766e" : "#66756f";
+  els.adminLoginForm.classList.toggle("hidden", allowed);
+  els.adminLogoutBtn.classList.toggle("hidden", !allowed);
+  els.adminContent.classList.toggle("hidden", !allowed);
+  if (allowed) {
+    els.adminLoginMessage.classList.remove("error");
+    els.adminLoginMessage.textContent = `已授权：${ADMIN_EMAIL}`;
+  }
+}
+
+function requireAdmin() {
+  if (isAdmin()) return true;
+  alert("只有唯一管理员可以操作后台。请先输入管理员邮箱。");
+  els.adminEmailInput.focus();
+  return false;
+}
+
+function loginAdmin(event) {
+  event.preventDefault();
+  const email = normalizeEmail(els.adminEmailInput.value);
+  if (email !== ADMIN_EMAIL) {
+    els.adminLoginMessage.textContent = "邮箱不匹配，无法进入后台。";
+    els.adminLoginMessage.classList.add("error");
+    return;
+  }
+  adminEmail = email;
+  localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+  els.adminEmailInput.value = "";
+  renderAdminAccess();
+}
+
+function logoutAdmin() {
+  adminEmail = "";
+  localStorage.removeItem(STORAGE_KEYS.adminEmail);
+  els.adminLoginMessage.textContent = "商品管理、导出销售记录和清空数据仅管理员可用。";
+  els.adminLoginMessage.classList.remove("error");
+  renderAdminAccess();
+}
+
 function createId() {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -69,11 +131,20 @@ function money(value) {
   return `RM ${Number(value || 0).toFixed(2)}`;
 }
 
+function formatDate(date) {
+  return date.toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+}
+
 function renderAll() {
   renderCategoryFilter();
   renderProducts();
   renderCart();
   renderSales();
+  renderAdminAccess();
   updateNetworkStatus();
 }
 
@@ -205,9 +276,23 @@ function checkout() {
     return;
   }
 
+  const createdAt = new Date();
+  const serviceEnd = new Date(createdAt);
+  serviceEnd.setDate(serviceEnd.getDate() + 21);
+
   const sale = {
     id: `POS${Date.now()}`,
-    createdAt: new Date().toISOString(),
+    createdAt: createdAt.toISOString(),
+    customer: {
+      name: els.customerNameInput.value.trim(),
+      phone: els.customerPhoneInput.value.trim()
+    },
+    service: {
+      name: "简单草本减脂计划第一阶段",
+      startDate: createdAt.toISOString(),
+      endDate: serviceEnd.toISOString(),
+      durationDays: 21
+    },
     items: structuredClone(cart),
     subtotal: totals.subtotal,
     discount: totals.discount,
@@ -222,6 +307,8 @@ function checkout() {
   });
   sales.unshift(sale);
   cart = [];
+  els.customerNameInput.value = "";
+  els.customerPhoneInput.value = "";
   els.discountInput.value = "0";
   els.paidInput.value = "";
   save(STORAGE_KEYS.products, products);
@@ -241,6 +328,9 @@ function buildReceipt(sale) {
     "简单草本减脂计划",
     `订单号：${sale.id}`,
     `时间：${new Date(sale.createdAt).toLocaleString()}`,
+    `客户：${sale.customer?.name || "-"}`,
+    `电话：${sale.customer?.phone || "-"}`,
+    `计划周期：${formatDate(new Date(sale.service.startDate))} 至 ${formatDate(new Date(sale.service.endDate))}`,
     "------------------------------"
   ];
   for (const item of sale.items) {
@@ -278,6 +368,7 @@ function renderSales() {
         <strong>${money(sale.total)}</strong>
         <span>${new Date(sale.createdAt).toLocaleTimeString()}</span>
       </div>
+      <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
     `;
     els.salesList.append(row);
@@ -286,6 +377,7 @@ function renderSales() {
 
 function saveProduct(event) {
   event.preventDefault();
+  if (!requireAdmin()) return;
   const product = {
     id: createId(),
     name: els.nameInput.value.trim(),
@@ -311,15 +403,20 @@ function saveProduct(event) {
 }
 
 function exportSales() {
+  if (!requireAdmin()) return;
   if (!sales.length) {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "时间", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "时间", "客户姓名", "电话", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
       new Date(sale.createdAt).toLocaleString(),
+      sale.customer?.name || "",
+      sale.customer?.phone || "",
+      sale.service?.startDate ? formatDate(new Date(sale.service.startDate)) : "",
+      sale.service?.endDate ? formatDate(new Date(sale.service.endDate)) : "",
       sale.items.map((item) => `${item.name} x${item.qty}`).join("; "),
       sale.subtotal,
       sale.discount,
@@ -357,6 +454,7 @@ function updateNetworkStatus() {
 }
 
 function resetAllData() {
+  if (!requireAdmin()) return;
   if (!confirm("确定清空商品、销售记录和购物车吗？")) return;
   products = structuredClone(sampleProducts);
   sales = [];
@@ -375,10 +473,13 @@ els.clearCartBtn.addEventListener("click", () => {
 els.discountInput.addEventListener("input", renderCart);
 els.paidInput.addEventListener("input", renderCart);
 els.checkoutBtn.addEventListener("click", checkout);
+els.adminLoginForm.addEventListener("submit", loginAdmin);
+els.adminLogoutBtn.addEventListener("click", logoutAdmin);
 els.productForm.addEventListener("submit", saveProduct);
 els.exportBtn.addEventListener("click", exportSales);
 els.resetDataBtn.addEventListener("click", resetAllData);
 els.seedBtn.addEventListener("click", () => {
+  if (!requireAdmin()) return;
   products = structuredClone(sampleProducts);
   save(STORAGE_KEYS.products, products);
   renderAll();
