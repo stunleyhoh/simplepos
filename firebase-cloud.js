@@ -15,7 +15,7 @@ import {
   serverTimestamp,
   setDoc
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-import { adminEmail, firebaseConfig } from "./firebase-config.js";
+import { adminEmail, firebaseConfig } from "./firebase-config.local.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);

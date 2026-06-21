@@ -5,7 +5,8 @@ const STORAGE_KEYS = {
   branchId: "simple-herbal-pos-branch-id",
   branches: "simple-herbal-pos-branches",
   authorizedUsers: "simple-herbal-pos-authorized-users",
-  operatorEmail: "simple-herbal-pos-operator-email"
+  operatorEmail: "simple-herbal-pos-operator-email",
+  pendingSales: "simple-herbal-pos-pending-sales"
 };
 
 const ADMIN_EMAIL = "stanleyhoh79@gmail.com";
@@ -28,6 +29,7 @@ let products = load(STORAGE_KEYS.products, sampleProducts);
 let sales = load(STORAGE_KEYS.sales, []);
 let branches = load(STORAGE_KEYS.branches, defaultBranches);
 let authorizedUsers = load(STORAGE_KEYS.authorizedUsers, defaultAuthorizedUsers);
+let pendingSales = load(STORAGE_KEYS.pendingSales, []);
 let cart = [];
 let deferredInstallPrompt = null;
 let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
@@ -117,8 +119,26 @@ function hasCloud() {
 }
 
 function updateCloudStatus(text, ok = false) {
-  els.cloudStatus.textContent = text;
+  const pendingText = pendingSales.length ? ` · 待同步 ${pendingSales.length}` : "";
+  els.cloudStatus.textContent = `${text}${pendingText}`;
   els.cloudStatus.style.color = ok ? "#0f766e" : "#66756f";
+}
+
+function savePendingSales() {
+  save(STORAGE_KEYS.pendingSales, pendingSales);
+}
+
+function queuePendingSale(sale) {
+  if (!pendingSales.some((item) => item.id === sale.id)) {
+    pendingSales.unshift({ ...sale, syncStatus: "pending" });
+    savePendingSales();
+  }
+  updateCloudStatus("订单待同步");
+}
+
+function markSaleSynced(saleId) {
+  pendingSales = pendingSales.filter((sale) => sale.id !== saleId);
+  savePendingSales();
 }
 
 function isAdmin() {
@@ -309,16 +329,41 @@ async function signInWithGoogle() {
 }
 
 async function syncSaleToCloud(sale) {
-  if (!hasCloud() || !navigator.onLine) return false;
+  if (!hasCloud() || !navigator.onLine) {
+    queuePendingSale(sale);
+    return false;
+  }
   try {
     await window.cloudPOS.saveSale(sale);
+    markSaleSynced(sale.id);
     updateCloudStatus("云端已同步", true);
     return true;
   } catch (error) {
+    queuePendingSale(sale);
     updateCloudStatus("云端同步失败");
     console.warn("Cloud sync failed", error);
     return false;
   }
+}
+
+async function syncPendingSales() {
+  if (!pendingSales.length || !hasCloud() || !navigator.onLine) {
+    updateCloudStatus(hasCloud() ? "云端已连接" : "云端未连接", hasCloud());
+    return;
+  }
+
+  updateCloudStatus(`正在补传 ${pendingSales.length} 单`);
+  for (const sale of [...pendingSales].reverse()) {
+    try {
+      await window.cloudPOS.saveSale(sale);
+      markSaleSynced(sale.id);
+    } catch (error) {
+      updateCloudStatus("部分订单待同步");
+      console.warn("Pending sale sync failed", error);
+      return;
+    }
+  }
+  updateCloudStatus("离线订单已同步", true);
 }
 
 async function syncProductToCloud(product) {
@@ -387,6 +432,7 @@ function applyCloudUser(appUser) {
   localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   updateCloudStatus(`云端已登录：${appUser.email}`, true);
+  syncPendingSales();
   renderAll();
 }
 
@@ -701,7 +747,8 @@ async function checkout() {
     discount: totals.discount,
     total: totals.total,
     paid: totals.paid,
-    change: totals.change
+    change: totals.change,
+    syncStatus: navigator.onLine && hasCloud() ? "syncing" : "pending"
   };
 
   products = products.map((product) => {
@@ -777,6 +824,7 @@ function renderSales() {
       </div>
       <span class="product-meta">分行：${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))}</span>
       <span class="product-meta">收银员：${escapeHtml(sale.operator?.name || "-")}</span>
+      <span class="product-meta">同步：${pendingSales.some((item) => item.id === sale.id) ? "待同步" : "已处理"}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
     `;
@@ -923,11 +971,13 @@ function resetAllData() {
   if (!confirm("确定清空商品、销售记录和购物车吗？")) return;
   products = cloneSampleProductsForBranches();
   sales = [];
+  pendingSales = [];
   cart = [];
   branches = structuredClone(defaultBranches);
   authorizedUsers = structuredClone(defaultAuthorizedUsers);
   save(STORAGE_KEYS.products, products);
   save(STORAGE_KEYS.sales, sales);
+  savePendingSales();
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   renderAll();
@@ -968,11 +1018,15 @@ els.seedBtn.addEventListener("click", () => {
 });
 els.closeReceiptBtn.addEventListener("click", () => els.receiptDialog.close());
 els.printReceiptBtn.addEventListener("click", () => window.print());
-window.addEventListener("online", updateNetworkStatus);
+window.addEventListener("online", () => {
+  updateNetworkStatus();
+  syncPendingSales();
+});
 window.addEventListener("offline", updateNetworkStatus);
 
 window.addEventListener("cloud-ready", (event) => {
   updateCloudStatus(`云端已连接：${event.detail.projectId}`, true);
+  syncPendingSales();
 });
 
 window.addEventListener("cloud-auth-change", (event) => {

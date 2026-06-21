@@ -138,7 +138,8 @@ sales
 
 你提供 Firebase 配置后，项目已经新增：
 
-- `firebase-config.js`：Firebase 项目配置
+- `firebase-config.example.js`：可提交到 GitHub 的 Firebase 配置模板
+- `firebase-config.local.js`：真实 Firebase 项目配置，只留在本机，不提交
 - `firebase-cloud.js`：Google 登录和 Firestore 基础同步
 - `firestore.rules`：建议使用的 Firestore 安全规则
 
@@ -147,6 +148,8 @@ sales
 - Google 登录
 - 云端连接状态
 - 收款后尝试同步销售记录到 Firestore
+- 断网收款会进入待同步队列
+- 恢复网络后自动补传待同步订单
 - 新增分行时尝试同步到 Firestore
 - 授权用户时尝试同步到 Firestore
 - 后台一键初始化云端数据
@@ -207,3 +210,44 @@ products
 ```text
 sales
 ```
+
+## 第 11 步：测试离线补传
+
+1. 保持 Google 管理员或授权用户已登录。
+2. 断开网络。
+3. 完成一笔收款。
+4. 顶部云端状态应该显示 `待同步 1`。
+5. 恢复网络。
+6. 系统会自动补传订单。
+7. 到 Firestore 的 `sales` 集合确认订单是否出现。
+
+## GitHub Secret Scanning 提醒
+
+如果 GitHub 显示：
+
+```text
+Action needed: Secrets detected
+Google API Key
+```
+
+这是因为 Firebase Web 配置里的 `apiKey` 被扫描到了。Firebase Web API Key 会出现在前端，但仍然应该避免直接提交到公开仓库，并且要在 Google Cloud 里限制这个 key。
+
+项目现在已经调整为：
+
+```text
+firebase-config.example.js  可以提交
+firebase-config.local.js    本机真实配置，不提交
+```
+
+请确认 `.gitignore` 里有：
+
+```text
+firebase-config.local.js
+```
+
+如果 GitHub 已经报警，建议你做两件事：
+
+1. 到 Google Cloud Console 限制 API Key，只允许你的网站域名使用。
+2. GitHub alert 里如果确认只是 Firebase Web API Key，可以在处理完限制后标记为 resolved / false positive。
+
+正式上线时，部署环境仍然需要有 `firebase-config.local.js` 或等效配置文件，否则网页无法连接 Firebase。

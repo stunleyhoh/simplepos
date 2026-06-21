@@ -35,6 +35,7 @@
 - 授权使用者登录后才能完成收款
 - Firebase Google 登录基础接入
 - Firestore 云端同步基础接入
+- 离线订单队列，恢复网络后自动补传
 - 商品新增和同条码覆盖更新
 - 今日销售汇总
 - 销售记录导出 CSV
@@ -106,9 +107,21 @@ stanleyhoh79@gmail.com
 
 当前版本已经完成第一步：系统文件“联网优先、断网可打开”。下一阶段要做的是“订单和库存云端同步”，这样总管理员才能看到所有分行的实时数据。
 
-当前 Firebase 已经接入基础层：Google 登录、云端状态、销售记录写入 Firestore、分行和授权用户写入 Firestore。接下来要继续完善的是离线订单队列、云端实时读取和库存同步。
+当前 Firebase 已经接入基础层：Google 登录、云端状态、销售记录写入 Firestore、分行和授权用户写入 Firestore、离线订单队列。接下来要继续完善的是云端实时读取和库存同步。
 
 管理员后台已经加入 `初始化云端数据`。第一次完成 Firebase 设置后，管理员 Google 登录，再点击这个按钮，就会把本地分行、授权用户、商品上传到 Firestore。
+
+离线订单队列工作方式：
+
+- 断网或云端不可用时完成收款，订单会先保存在本机待同步队列。
+- 顶部云端状态会显示待同步数量。
+- 恢复网络并登录云端后，系统会自动补传待同步订单。
+
+Firebase 配置安全：
+
+- `firebase-config.example.js` 是模板，可以提交到 GitHub。
+- `firebase-config.local.js` 放真实 Firebase 配置，只留本机，不提交。
+- 如果 GitHub 提醒 Google API Key 泄露，请到 Google Cloud 限制 API Key 的可用域名。
 
 ## 本地运行
 
