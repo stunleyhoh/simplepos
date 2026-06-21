@@ -427,6 +427,14 @@ select {
   gap: 8px;
 }
 
+.compact-list {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
 .management-row {
   display: flex;
   align-items: center;
@@ -470,6 +478,10 @@ select {
   color: var(--muted);
   border: 1px dashed var(--line);
   border-radius: 8px;
+}
+
+.compact-empty {
+  min-height: 44px;
 }
 
 .hidden {

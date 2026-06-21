@@ -18,7 +18,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.38";
+const APP_VERSION = "v0.40";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -201,6 +201,8 @@ const els = {
   salesDateInput: document.querySelector("#salesDateInput"),
   salesSearchInput: document.querySelector("#salesSearchInput"),
   salesPaymentFilter: document.querySelector("#salesPaymentFilter"),
+  dailyPaymentSummaryList: document.querySelector("#dailyPaymentSummaryList"),
+  exportDailySettlementBtn: document.querySelector("#exportDailySettlementBtn"),
   toggleSalesLimitBtn: document.querySelector("#toggleSalesLimitBtn"),
   todaySalesBtn: document.querySelector("#todaySalesBtn"),
   salesList: document.querySelector("#salesList"),
@@ -1797,6 +1799,7 @@ function renderSales() {
     ? `${selectedSales.length} 单，共 ${money(total)}`
     : "暂无销售";
   els.salesList.innerHTML = "";
+  renderDailyPaymentSummary(selectedSales);
 
   if (!selectedSales.length) {
     els.salesList.innerHTML = '<div class="empty">完成收款后这里会出现销售记录</div>';
@@ -1829,6 +1832,28 @@ function renderSales() {
     const voidButton = row.querySelector("[data-void-sale]");
     if (voidButton) voidButton.addEventListener("click", () => voidSale(sale.id));
     els.salesList.append(row);
+  }
+}
+
+function renderDailyPaymentSummary(selectedSales) {
+  const activeSelectedSales = getActiveSales(selectedSales);
+  const paymentRows = getPaymentSummaryRows(activeSelectedSales);
+  els.dailyPaymentSummaryList.innerHTML = "";
+  if (!paymentRows.length) {
+    els.dailyPaymentSummaryList.innerHTML = '<div class="empty compact-empty">当前筛选没有结算资料</div>';
+    return;
+  }
+  for (const item of paymentRows) {
+    const row = document.createElement("div");
+    row.className = "management-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(item.method)}</strong>
+        <small>${item.orders} 单</small>
+      </div>
+      <small>${money(item.total)}</small>
+    `;
+    els.dailyPaymentSummaryList.append(row);
   }
 }
 
@@ -2082,6 +2107,40 @@ function exportPaymentSummary() {
     return;
   }
   downloadCsv(`payment-summary-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportDailySettlement() {
+  if (!requireAdmin()) return;
+  const selectedDate = els.salesDateInput.value || inputDate();
+  const paymentFilter = els.salesPaymentFilter.value;
+  const selectedSales = sales.filter((sale) => {
+    const matchDate = inputDate(new Date(sale.createdAt)) === selectedDate;
+    if (!matchDate || isSaleVoided(sale)) return false;
+    return paymentFilter === "all" || (sale.payment?.method || "现金") === paymentFilter;
+  });
+  const rows = [["类型", "日期", "付款筛选", "付款方式", "订单数", "金额", "订单号", "时间", "参考号", "客户"]];
+  for (const item of getPaymentSummaryRows(selectedSales)) {
+    rows.push(["汇总", selectedDate, paymentFilter === "all" ? "全部付款" : paymentFilter, item.method, item.orders, item.total, "", "", "", ""]);
+  }
+  for (const sale of selectedSales) {
+    rows.push([
+      "明细",
+      selectedDate,
+      paymentFilter === "all" ? "全部付款" : paymentFilter,
+      sale.payment?.method || "现金",
+      "",
+      sale.total,
+      sale.id,
+      new Date(sale.createdAt).toLocaleString(),
+      sale.payment?.reference || "",
+      `${sale.customer?.name || ""} ${sale.customer?.phone || ""}`.trim()
+    ]);
+  }
+  if (rows.length === 1) {
+    alert("当前筛选没有结算资料。");
+    return;
+  }
+  downloadCsv(`daily-settlement-${selectedDate}.csv`, rows);
 }
 
 function exportInventory() {
@@ -2384,6 +2443,7 @@ els.paymentMethodInput.addEventListener("change", () => {
 els.salesDateInput.addEventListener("change", renderSales);
 els.salesSearchInput.addEventListener("input", renderSales);
 els.salesPaymentFilter.addEventListener("change", renderSales);
+els.exportDailySettlementBtn.addEventListener("click", exportDailySettlement);
 els.menuSearchInput.addEventListener("input", renderMenuProductList);
 els.inventorySearchInput.addEventListener("input", renderInventoryOverview);
 els.toggleSalesLimitBtn.addEventListener("click", () => {
