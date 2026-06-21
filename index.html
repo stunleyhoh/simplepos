@@ -147,6 +147,11 @@
         </div>
 
         <div class="panel-subsection">
+          <h3>最近审计</h3>
+          <div id="auditList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
           <h3>客户跟进</h3>
           <div id="followUpList" class="management-list"></div>
         </div>
@@ -200,6 +205,7 @@
           <button id="initCloudBtn" class="ghost" type="button">初始化云端数据</button>
           <button id="syncPendingBtn" class="ghost" type="button">补传离线订单</button>
           <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
+          <button id="exportSummaryBtn" class="ghost" type="button">导出分行汇总</button>
           <button id="backupBtn" class="ghost" type="button">导出完整备份</button>
           <button id="restoreBtn" class="ghost danger" type="button">从备份恢复</button>
           <input id="restoreInput" class="hidden" type="file" accept="application/json">
@@ -214,6 +220,10 @@
           <h2 id="historyTitle">今日销售</h2>
           <p id="salesSummary">暂无销售</p>
         </div>
+      </div>
+      <div class="toolbar">
+        <input id="salesDateInput" type="date" aria-label="销售日期">
+        <button id="todaySalesBtn" class="ghost" type="button">今天</button>
       </div>
       <div id="salesList" class="sales-list"></div>
     </section>

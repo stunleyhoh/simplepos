@@ -8,6 +8,8 @@ const STORAGE_KEYS = {
   operatorEmail: "simple-herbal-pos-operator-email",
   pendingSales: "simple-herbal-pos-pending-sales",
   pendingProducts: "simple-herbal-pos-pending-products",
+  pendingStockAdjustments: "simple-herbal-pos-pending-stock-adjustments",
+  pendingAuditLogs: "simple-herbal-pos-pending-audit-logs",
   settings: "simple-herbal-pos-settings"
 };
 
@@ -40,6 +42,9 @@ let branches = load(STORAGE_KEYS.branches, defaultBranches);
 let authorizedUsers = load(STORAGE_KEYS.authorizedUsers, defaultAuthorizedUsers);
 let pendingSales = load(STORAGE_KEYS.pendingSales, []);
 let pendingProducts = load(STORAGE_KEYS.pendingProducts, []);
+let pendingStockAdjustments = load(STORAGE_KEYS.pendingStockAdjustments, []);
+let pendingAuditLogs = load(STORAGE_KEYS.pendingAuditLogs, []);
+let localAuditLogs = load("simple-herbal-pos-local-audit-logs", []);
 let appSettings = load(STORAGE_KEYS.settings, defaultSettings);
 let cart = [];
 let deferredInstallPrompt = null;
@@ -94,6 +99,7 @@ const els = {
   initCloudBtn: document.querySelector("#initCloudBtn"),
   syncPendingBtn: document.querySelector("#syncPendingBtn"),
   exportBtn: document.querySelector("#exportBtn"),
+  exportSummaryBtn: document.querySelector("#exportSummaryBtn"),
   backupBtn: document.querySelector("#backupBtn"),
   restoreBtn: document.querySelector("#restoreBtn"),
   restoreInput: document.querySelector("#restoreInput"),
@@ -104,6 +110,7 @@ const els = {
   globalStockText: document.querySelector("#globalStockText"),
   branchOverview: document.querySelector("#branchOverview"),
   syncOverview: document.querySelector("#syncOverview"),
+  auditList: document.querySelector("#auditList"),
   followUpList: document.querySelector("#followUpList"),
   lowStockList: document.querySelector("#lowStockList"),
   settingsForm: document.querySelector("#settingsForm"),
@@ -120,6 +127,8 @@ const els = {
   userBranchSelect: document.querySelector("#userBranchSelect"),
   userList: document.querySelector("#userList"),
   salesSummary: document.querySelector("#salesSummary"),
+  salesDateInput: document.querySelector("#salesDateInput"),
+  todaySalesBtn: document.querySelector("#todaySalesBtn"),
   salesList: document.querySelector("#salesList"),
   receiptDialog: document.querySelector("#receiptDialog"),
   receiptNo: document.querySelector("#receiptNo"),
@@ -146,7 +155,7 @@ function hasCloud() {
 }
 
 function updateCloudStatus(text, ok = false) {
-  const pendingCount = pendingSales.length + pendingProducts.length;
+  const pendingCount = pendingSales.length + pendingProducts.length + pendingStockAdjustments.length;
   const pendingText = pendingCount ? ` · 待同步 ${pendingCount}` : "";
   els.cloudStatus.textContent = `${text}${pendingText}`;
   els.cloudStatus.style.color = ok ? "#0f766e" : "#66756f";
@@ -185,6 +194,73 @@ function queuePendingProduct(product) {
 function markProductSynced(productId) {
   pendingProducts = pendingProducts.filter((product) => product.id !== productId);
   savePendingProducts();
+}
+
+function savePendingStockAdjustments() {
+  save(STORAGE_KEYS.pendingStockAdjustments, pendingStockAdjustments);
+}
+
+function queuePendingStockAdjustment(adjustment) {
+  pendingStockAdjustments = [
+    adjustment,
+    ...pendingStockAdjustments.filter((item) => item.id !== adjustment.id)
+  ];
+  savePendingStockAdjustments();
+  updateCloudStatus("库存调整待同步");
+}
+
+function markStockAdjustmentSynced(adjustmentId) {
+  pendingStockAdjustments = pendingStockAdjustments.filter((item) => item.id !== adjustmentId);
+  savePendingStockAdjustments();
+}
+
+function savePendingAuditLogs() {
+  save(STORAGE_KEYS.pendingAuditLogs, pendingAuditLogs);
+}
+
+function getCurrentActor() {
+  return currentCloudUser || getOperator() || { email: adminEmail || operatorEmail || "", name: "本机用户" };
+}
+
+function queuePendingAuditLog(log) {
+  pendingAuditLogs = [
+    log,
+    ...pendingAuditLogs.filter((item) => item.id !== log.id)
+  ];
+  savePendingAuditLogs();
+}
+
+function markAuditLogSynced(logId) {
+  pendingAuditLogs = pendingAuditLogs.filter((item) => item.id !== logId);
+  savePendingAuditLogs();
+}
+
+async function writeAuditLog(action, detail = {}) {
+  const log = {
+    id: `AUD${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    action,
+    detail,
+    actor: getCurrentActor(),
+    branchId: currentBranchId,
+    branchName: getBranchName(currentBranchId),
+    createdAt: new Date().toISOString()
+  };
+  localAuditLogs.unshift(log);
+  localAuditLogs = localAuditLogs.slice(0, 50);
+  save("simple-herbal-pos-local-audit-logs", localAuditLogs);
+  if (!hasCloud() || !navigator.onLine) {
+    queuePendingAuditLog(log);
+    return false;
+  }
+  try {
+    await window.cloudPOS.saveAuditLog(log);
+    markAuditLogSynced(log.id);
+    return true;
+  } catch (error) {
+    queuePendingAuditLog(log);
+    console.warn("Audit log sync failed", error);
+    return false;
+  }
 }
 
 function isAdmin() {
@@ -294,13 +370,15 @@ function renderAdminAccess() {
   els.adminContent.classList.toggle("hidden", !allowed);
   if (allowed) {
     els.adminLoginMessage.classList.remove("error");
-    els.adminLoginMessage.textContent = `已授权：${ADMIN_EMAIL}`;
+    els.adminLoginMessage.textContent = isCloudAdmin()
+      ? `Google 管理员已授权：${ADMIN_EMAIL}`
+      : `本机管理员已授权：${ADMIN_EMAIL}`;
   }
 }
 
 function getOperator() {
   const email = normalizeEmail(operatorEmail);
-  return authorizedUsers.find((user) => normalizeEmail(user.email) === email) || null;
+  return authorizedUsers.find((user) => normalizeEmail(user.email) === email && user.active !== false) || null;
 }
 
 function isOperatorAllowedForCurrentBranch() {
@@ -461,8 +539,60 @@ async function syncPendingProducts() {
   updateCloudStatus("库存已同步", true);
 }
 
+async function syncStockAdjustmentToCloud(adjustment) {
+  if (!hasCloud() || !navigator.onLine) {
+    queuePendingStockAdjustment(adjustment);
+    return false;
+  }
+  try {
+    await window.cloudPOS.saveStockAdjustment(adjustment);
+    markStockAdjustmentSynced(adjustment.id);
+    updateCloudStatus("库存调整已同步", true);
+    return true;
+  } catch (error) {
+    queuePendingStockAdjustment(adjustment);
+    updateCloudStatus("库存调整同步失败");
+    console.warn("Stock adjustment sync failed", error);
+    return false;
+  }
+}
+
+async function syncPendingStockAdjustments() {
+  if (!pendingStockAdjustments.length || !hasCloud() || !navigator.onLine) return;
+  updateCloudStatus(`正在补传 ${pendingStockAdjustments.length} 条库存调整`);
+  for (const adjustment of [...pendingStockAdjustments].reverse()) {
+    try {
+      await window.cloudPOS.saveStockAdjustment(adjustment);
+      markStockAdjustmentSynced(adjustment.id);
+    } catch (error) {
+      updateCloudStatus("部分库存调整待同步");
+      console.warn("Pending stock adjustment sync failed", error);
+      return;
+    }
+  }
+  updateCloudStatus("库存调整已同步", true);
+}
+
+async function syncPendingAuditLogs() {
+  if (!pendingAuditLogs.length || !hasCloud() || !navigator.onLine) return;
+  updateCloudStatus(`正在补传 ${pendingAuditLogs.length} 条审计记录`);
+  for (const log of [...pendingAuditLogs].reverse()) {
+    try {
+      await window.cloudPOS.saveAuditLog(log);
+      markAuditLogSynced(log.id);
+    } catch (error) {
+      updateCloudStatus("部分审计记录待同步");
+      console.warn("Pending audit log sync failed", error);
+      return;
+    }
+  }
+  updateCloudStatus("审计记录已同步", true);
+}
+
 async function syncPendingChanges() {
   await syncPendingProducts();
+  await syncPendingStockAdjustments();
+  await syncPendingAuditLogs();
   await syncPendingSales();
 }
 
@@ -486,6 +616,11 @@ async function initializeCloudData() {
       await window.cloudPOS.saveProduct(product);
     }
     await window.cloudPOS.saveSettings(appSettings);
+    await writeAuditLog("cloud.initialize", {
+      branches: branches.length,
+      users: authorizedUsers.length,
+      products: products.length
+    });
     updateCloudStatus("云端初始化完成", true);
     alert("云端数据初始化完成。");
   } catch (error) {
@@ -556,6 +691,7 @@ async function saveSettings(event) {
   if (hasCloud()) {
     window.cloudPOS.saveSettings(appSettings).catch((error) => console.warn("Settings cloud sync failed", error));
   }
+  writeAuditLog("settings.update", { settings: appSettings });
   renderAll();
 }
 
@@ -666,7 +802,7 @@ function renderManagementLists() {
   }
 
   els.userList.innerHTML = "";
-  for (const user of authorizedUsers) {
+  for (const user of authorizedUsers.filter((item) => item.active !== false)) {
     const row = document.createElement("div");
     row.className = "management-row";
     row.innerHTML = `
@@ -686,11 +822,30 @@ function renderManagementLists() {
   syncRow.className = "management-row";
   syncRow.innerHTML = `
     <div>
-      <strong>${pendingSales.length} 单订单、${pendingProducts.length} 个库存待同步</strong>
-      <small>${pendingSales.length || pendingProducts.length ? "恢复网络后会自动补传，也可以手动补传。" : "所有本机变更已处理。"}</small>
+      <strong>${pendingSales.length} 单订单、${pendingProducts.length} 个库存、${pendingStockAdjustments.length} 条调整、${pendingAuditLogs.length} 条审计待同步</strong>
+      <small>${pendingSales.length || pendingProducts.length || pendingStockAdjustments.length || pendingAuditLogs.length ? "恢复网络后会自动补传，也可以手动补传。" : "所有本机变更已处理。"}</small>
     </div>
   `;
   els.syncOverview.append(syncRow);
+
+  els.auditList.innerHTML = "";
+  const auditRows = [...localAuditLogs].slice(0, 10);
+  if (!auditRows.length) {
+    els.auditList.innerHTML = '<div class="empty">暂无审计记录</div>';
+  } else {
+    for (const log of auditRows) {
+      const row = document.createElement("div");
+      row.className = "management-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(log.action)}</strong>
+          <small>${new Date(log.createdAt).toLocaleString()} · ${escapeHtml(log.actor?.email || "-")}</small>
+        </div>
+        <small>${escapeHtml(log.branchName || "-")}</small>
+      `;
+      els.auditList.append(row);
+    }
+  }
 }
 
 function addBranch(event) {
@@ -707,6 +862,7 @@ function addBranch(event) {
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.products, products);
   if (hasCloud()) window.cloudPOS.saveBranch({ id, name }).catch((error) => console.warn("Branch cloud sync failed", error));
+  writeAuditLog("branch.create", { id, name });
   els.branchForm.reset();
   renderAll();
 }
@@ -729,15 +885,26 @@ function addAuthorizedUser(event) {
   authorizedUsers.push(user);
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   if (hasCloud()) window.cloudPOS.saveAuthorizedUser(user).catch((error) => console.warn("User cloud sync failed", error));
+  writeAuditLog("user.authorize", { email: user.email, name: user.name, branchId: user.branchId });
   els.userForm.reset();
   renderAll();
 }
 
 function removeAuthorizedUser(userId) {
   if (!requireAdmin()) return;
-  authorizedUsers = authorizedUsers.filter((user) => user.id !== userId || normalizeEmail(user.email) === ADMIN_EMAIL);
+  const removedUser = authorizedUsers.find((user) => user.id === userId);
+  authorizedUsers = authorizedUsers.map((user) => {
+    if (user.id !== userId || normalizeEmail(user.email) === ADMIN_EMAIL) return user;
+    return { ...user, active: false };
+  });
   if (!getOperator()) logoutOperator();
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  if (removedUser && normalizeEmail(removedUser.email) !== ADMIN_EMAIL) {
+    if (hasCloud()) {
+      window.cloudPOS.saveAuthorizedUser({ ...removedUser, active: false }).catch((error) => console.warn("User deactivate sync failed", error));
+    }
+    writeAuditLog("user.remove", { email: removedUser.email, name: removedUser.name, branchId: removedUser.branchId });
+  }
   renderAll();
 }
 
@@ -756,6 +923,13 @@ function formatDate(date) {
     month: "2-digit",
     day: "2-digit"
   });
+}
+
+function inputDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function renderAll() {
@@ -1086,20 +1260,21 @@ function buildReceipt(sale) {
 }
 
 function renderSales() {
-  const today = new Date().toDateString();
-  const todaySales = sales.filter((sale) => new Date(sale.createdAt).toDateString() === today);
-  const total = todaySales.reduce((sum, sale) => sum + sale.total, 0);
-  els.salesSummary.textContent = todaySales.length
-    ? `${todaySales.length} 单，共 ${money(total)}`
+  if (!els.salesDateInput.value) els.salesDateInput.value = inputDate();
+  const selectedDate = els.salesDateInput.value;
+  const selectedSales = sales.filter((sale) => inputDate(new Date(sale.createdAt)) === selectedDate);
+  const total = selectedSales.reduce((sum, sale) => sum + sale.total, 0);
+  els.salesSummary.textContent = selectedSales.length
+    ? `${selectedSales.length} 单，共 ${money(total)}`
     : "暂无销售";
   els.salesList.innerHTML = "";
 
-  if (!todaySales.length) {
+  if (!selectedSales.length) {
     els.salesList.innerHTML = '<div class="empty">完成收款后这里会出现销售记录</div>';
     return;
   }
 
-  for (const sale of todaySales.slice(0, 8)) {
+  for (const sale of selectedSales.slice(0, 8)) {
     const row = document.createElement("div");
     row.className = "sale-item";
     row.innerHTML = `
@@ -1171,6 +1346,7 @@ function saveProduct(event) {
 
   const sameBarcode = product.barcode && products.find((item) => item.barcode === product.barcode);
   let savedProduct = product;
+  const previousStock = sameBarcode ? getBranchStock(sameBarcode, currentBranchId) : 0;
   if (sameBarcode) {
     products = products.map((item) => {
       if (item.id !== sameBarcode.id) return item;
@@ -1193,6 +1369,29 @@ function saveProduct(event) {
   }
   save(STORAGE_KEYS.products, products);
   syncProductToCloud(savedProduct);
+  const adjustment = {
+    id: `ADJ${Date.now()}`,
+    createdAt: new Date().toISOString(),
+    productId: savedProduct.id,
+    productName: savedProduct.name,
+    barcode: savedProduct.barcode,
+    branchId: currentBranchId,
+    branchName: getBranchName(currentBranchId),
+    beforeStock: previousStock,
+    afterStock: getBranchStock(savedProduct, currentBranchId),
+    delta: getBranchStock(savedProduct, currentBranchId) - previousStock,
+    reason: sameBarcode ? "管理员调整库存" : "管理员新增商品",
+    operator: currentCloudUser || { email: adminEmail || ADMIN_EMAIL, name: "管理员" }
+  };
+  syncStockAdjustmentToCloud(adjustment);
+  writeAuditLog("product.save", {
+    productId: savedProduct.id,
+    productName: savedProduct.name,
+    barcode: savedProduct.barcode,
+    branchId: currentBranchId,
+    previousStock,
+    nextStock: adjustment.afterStock
+  });
   els.productForm.reset();
   renderAll();
 }
@@ -1226,14 +1425,30 @@ function exportSales() {
       sale.change
     ]);
   }
+  downloadCsv(`sales-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function downloadCsv(filename, rows) {
   const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n");
   const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `sales-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function exportBranchSummary() {
+  if (!requireAdmin()) return;
+  const rows = [["分行", "订单数", "客户数", "销售额"]];
+  for (const branch of branches) {
+    const branchSales = sales.filter((sale) => (sale.branchId || "hq") === branch.id);
+    const customers = new Set(branchSales.map((sale) => `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`).filter(Boolean));
+    const revenue = branchSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    rows.push([branch.name, branchSales.length, customers.size, revenue]);
+  }
+  downloadCsv(`branch-summary-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 }
 
 function exportBackup() {
@@ -1246,7 +1461,9 @@ function exportBackup() {
     products,
     sales,
     pendingSales,
-    pendingProducts
+    pendingProducts,
+    pendingStockAdjustments,
+    pendingAuditLogs
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -1275,6 +1492,8 @@ function restoreBackupFile(file) {
       sales = backup.sales;
       pendingSales = Array.isArray(backup.pendingSales) ? backup.pendingSales : [];
       pendingProducts = Array.isArray(backup.pendingProducts) ? backup.pendingProducts : [];
+      pendingStockAdjustments = Array.isArray(backup.pendingStockAdjustments) ? backup.pendingStockAdjustments : [];
+      pendingAuditLogs = Array.isArray(backup.pendingAuditLogs) ? backup.pendingAuditLogs : [];
       appSettings = backup.settings || defaultSettings;
 
       save(STORAGE_KEYS.branches, branches);
@@ -1283,10 +1502,18 @@ function restoreBackupFile(file) {
       save(STORAGE_KEYS.sales, sales);
       savePendingSales();
       savePendingProducts();
+      savePendingStockAdjustments();
+      savePendingAuditLogs();
       save(STORAGE_KEYS.settings, appSettings);
       migrateManagementData();
       migrateProductsForBranches();
       renderAll();
+      writeAuditLog("backup.restore", {
+        branches: branches.length,
+        users: authorizedUsers.length,
+        products: products.length,
+        sales: sales.length
+      });
       alert("备份已恢复到本机。需要同步到云端时，请点击初始化云端数据。");
     } catch (error) {
       alert(`恢复失败：${error.message}`);
@@ -1326,9 +1553,14 @@ function resetAllData() {
   save(STORAGE_KEYS.sales, sales);
   savePendingSales();
   pendingProducts = [];
+  pendingStockAdjustments = [];
+  pendingAuditLogs = [];
   savePendingProducts();
+  savePendingStockAdjustments();
+  savePendingAuditLogs();
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  writeAuditLog("data.reset", {});
   renderAll();
 }
 
@@ -1350,6 +1582,11 @@ els.clearCartBtn.addEventListener("click", () => {
 });
 els.discountInput.addEventListener("input", renderCart);
 els.paidInput.addEventListener("input", renderCart);
+els.salesDateInput.addEventListener("change", renderSales);
+els.todaySalesBtn.addEventListener("click", () => {
+  els.salesDateInput.value = inputDate();
+  renderSales();
+});
 els.checkoutBtn.addEventListener("click", checkout);
 els.adminLoginForm.addEventListener("submit", loginAdmin);
 els.adminGoogleLoginBtn.addEventListener("click", signInWithGoogle);
@@ -1361,6 +1598,7 @@ els.productForm.addEventListener("submit", saveProduct);
 els.initCloudBtn.addEventListener("click", initializeCloudData);
 els.syncPendingBtn.addEventListener("click", syncPendingChanges);
 els.exportBtn.addEventListener("click", exportSales);
+els.exportSummaryBtn.addEventListener("click", exportBranchSummary);
 els.backupBtn.addEventListener("click", exportBackup);
 els.restoreBtn.addEventListener("click", () => els.restoreInput.click());
 els.restoreInput.addEventListener("change", () => {

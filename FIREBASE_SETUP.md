@@ -207,6 +207,8 @@ branches
 users
 products
 settings
+stockAdjustments
+auditLogs
 ```
 
 之后你完成一笔收款，Firestore 里还会出现：

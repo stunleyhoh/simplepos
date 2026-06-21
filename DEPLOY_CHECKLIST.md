@@ -25,6 +25,8 @@
   - `products`
   - `settings`
 - 完成一笔收款后，Firestore 出现 `sales`。
+- 管理员新增商品或调整库存后，Firestore 出现 `stockAdjustments`。
+- 管理员执行新增分行、授权用户或保存设置后，Firestore 出现 `auditLogs`。
 - 断网收款后，顶部显示待同步数量。
 - 恢复网络后，待同步订单自动补传。
 - `刷新云端资料` 可以读取云端资料。

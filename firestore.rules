@@ -60,5 +60,17 @@ service cloud.firestore {
       allow read: if isActiveCashier();
       allow create, update, delete: if isAdmin();
     }
+
+    match /stockAdjustments/{adjustmentId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if isAdmin();
+    }
   }
 }

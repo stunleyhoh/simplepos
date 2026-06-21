@@ -127,6 +127,20 @@ async function saveProduct(product) {
   }, { merge: true });
 }
 
+async function saveStockAdjustment(adjustment) {
+  await setDoc(doc(db, "stockAdjustments", adjustment.id), {
+    ...adjustment,
+    syncedAt: serverTimestamp()
+  }, { merge: true });
+}
+
+async function saveAuditLog(log) {
+  await setDoc(doc(db, "auditLogs", log.id), {
+    ...log,
+    syncedAt: serverTimestamp()
+  }, { merge: true });
+}
+
 async function saveSettings(settings) {
   await setDoc(doc(db, "settings", "app"), {
     ...settings,
@@ -202,6 +216,8 @@ window.cloudPOS = {
   saveBranch,
   saveAuthorizedUser,
   saveProduct,
+  saveStockAdjustment,
+  saveAuditLog,
   saveSettings,
   loadSettings,
   saveSale,
