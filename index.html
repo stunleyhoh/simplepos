@@ -176,6 +176,11 @@
         </div>
 
         <div class="panel-subsection" data-view-panel="settings">
+          <h3>交班记录</h3>
+          <div id="shiftList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>最近审计</h3>
           <div id="auditList" class="management-list"></div>
         </div>
@@ -259,6 +264,7 @@
           <button id="exportCustomersBtn" class="ghost" type="button">导出客户名单</button>
           <button id="exportAuditBtn" class="ghost" type="button">导出审计日志</button>
           <button id="exportStockBtn" class="ghost" type="button">导出库存流水</button>
+          <button id="exportShiftsBtn" class="ghost" type="button">导出交班记录</button>
           <button id="backupBtn" class="ghost" type="button">导出完整备份</button>
           <button id="restoreBtn" class="ghost danger" type="button">从备份恢复</button>
           <input id="restoreInput" class="hidden" type="file" accept="application/json">
@@ -313,8 +319,10 @@
       <div class="cashier-status">
         <strong>已登录操作员</strong>
         <span id="cashierOperatorText">未登录</span>
+        <span id="shiftStatusText">未开班</span>
       </div>
       <button id="quickCheckoutBtn" class="primary" type="button">开始收银 / 结算</button>
+      <button id="closeShiftBtn" class="ghost" type="button">结束班次 / 交班</button>
       <form id="operatorLoginForm" class="operator-login">
         <strong>员工登录 / 登出</strong>
         <input id="operatorEmailInput" type="email" autocomplete="username" required placeholder="授权用户邮箱">

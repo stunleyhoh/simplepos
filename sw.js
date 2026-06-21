@@ -1,4 +1,4 @@
-const CACHE_NAME = "simple-pos-v52";
+const CACHE_NAME = "simple-pos-v54";
 const APP_SHELL = [
   "./",
   "./index.html",

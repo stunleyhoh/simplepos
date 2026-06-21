@@ -7,6 +7,8 @@ const STORAGE_KEYS = {
   authorizedUsers: "simple-herbal-pos-authorized-users",
   operatorEmail: "simple-herbal-pos-operator-email",
   paymentMethod: "simple-herbal-pos-payment-method",
+  currentShift: "simple-herbal-pos-current-shift",
+  shifts: "simple-herbal-pos-shifts",
   pendingSales: "simple-herbal-pos-pending-sales",
   pendingSaleUpdates: "simple-herbal-pos-pending-sale-updates",
   pendingProducts: "simple-herbal-pos-pending-products",
@@ -18,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.40";
+const APP_VERSION = "v0.42";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -57,6 +59,8 @@ let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
 let currentBranchId = localStorage.getItem(STORAGE_KEYS.branchId) || "hq";
 let operatorEmail = localStorage.getItem(STORAGE_KEYS.operatorEmail) || "";
 let preferredPaymentMethod = localStorage.getItem(STORAGE_KEYS.paymentMethod) || "现金";
+let currentShift = load(STORAGE_KEYS.currentShift, null);
+let shifts = load(STORAGE_KEYS.shifts, []);
 let cloudSessionActive = false;
 let currentCloudUser = null;
 let reportRangeInitialized = false;
@@ -109,7 +113,9 @@ const els = {
   cashierMenu: document.querySelector("#cashierMenu"),
   cashierToggleBtn: document.querySelector("#cashierToggleBtn"),
   cashierOperatorText: document.querySelector("#cashierOperatorText"),
+  shiftStatusText: document.querySelector("#shiftStatusText"),
   quickCheckoutBtn: document.querySelector("#quickCheckoutBtn"),
+  closeShiftBtn: document.querySelector("#closeShiftBtn"),
   installBtn: document.querySelector("#installBtn"),
   seedBtn: document.querySelector("#seedBtn"),
   searchInput: document.querySelector("#searchInput"),
@@ -157,6 +163,7 @@ const els = {
   exportCustomersBtn: document.querySelector("#exportCustomersBtn"),
   exportAuditBtn: document.querySelector("#exportAuditBtn"),
   exportStockBtn: document.querySelector("#exportStockBtn"),
+  exportShiftsBtn: document.querySelector("#exportShiftsBtn"),
   backupBtn: document.querySelector("#backupBtn"),
   restoreBtn: document.querySelector("#restoreBtn"),
   restoreInput: document.querySelector("#restoreInput"),
@@ -179,6 +186,7 @@ const els = {
   inventorySearchInput: document.querySelector("#inventorySearchInput"),
   inventoryOverviewList: document.querySelector("#inventoryOverviewList"),
   syncOverview: document.querySelector("#syncOverview"),
+  shiftList: document.querySelector("#shiftList"),
   auditList: document.querySelector("#auditList"),
   stockAdjustmentList: document.querySelector("#stockAdjustmentList"),
   followUpList: document.querySelector("#followUpList"),
@@ -514,6 +522,74 @@ function isOperatorAllowedForCurrentBranch() {
   return Boolean(operator && operator.branchId === currentBranchId);
 }
 
+function saveCurrentShift() {
+  save(STORAGE_KEYS.currentShift, currentShift);
+}
+
+function saveShifts() {
+  save(STORAGE_KEYS.shifts, shifts);
+}
+
+function ensureCurrentShift() {
+  const operator = getOperator();
+  if (!operator) return;
+  if (currentShift && !currentShift.closedAt && currentShift.operatorEmail === operator.email && currentShift.branchId === currentBranchId) return;
+  currentShift = {
+    id: `SHIFT${Date.now()}`,
+    openedAt: new Date().toISOString(),
+    branchId: currentBranchId,
+    branchName: getBranchName(currentBranchId),
+    operatorName: operator.name,
+    operatorEmail: operator.email
+  };
+  saveCurrentShift();
+}
+
+function getShiftSales(shift) {
+  if (!shift) return [];
+  const openedAt = new Date(shift.openedAt);
+  const closedAt = shift.closedAt ? new Date(shift.closedAt) : new Date();
+  return getActiveSales().filter((sale) => {
+    const createdAt = new Date(sale.createdAt);
+    return (sale.branchId || "hq") === shift.branchId && createdAt >= openedAt && createdAt <= closedAt;
+  });
+}
+
+function getShiftSummary(shift) {
+  const shiftSales = getShiftSales(shift);
+  return {
+    orders: shiftSales.length,
+    total: shiftSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0),
+    payments: getPaymentSummaryRows(shiftSales)
+  };
+}
+
+function closeCurrentShift() {
+  if (!currentShift || currentShift.closedAt) {
+    alert("当前没有进行中的班次。");
+    return;
+  }
+  const summary = getShiftSummary(currentShift);
+  if (!confirm(`确定结束班次吗？本班 ${summary.orders} 单，共 ${money(summary.total)}。`)) return;
+  const closedShift = {
+    ...currentShift,
+    closedAt: new Date().toISOString(),
+    summary
+  };
+  shifts.unshift(closedShift);
+  shifts = shifts.slice(0, 100);
+  currentShift = null;
+  saveShifts();
+  saveCurrentShift();
+  writeAuditLog("shift.close", {
+    shiftId: closedShift.id,
+    orders: summary.orders,
+    total: summary.total
+  });
+  alert("班次已结束，交班记录已保存。");
+  renderAll();
+}
+
 function renderOperatorAccess() {
   const operator = getOperator();
   const allowed = isOperatorAllowedForCurrentBranch();
@@ -529,6 +605,10 @@ function renderOperatorAccess() {
       ? `${operator.name} · 分行不匹配`
       : "未登录";
   els.quickCheckoutBtn.textContent = allowed ? (cart.length ? "结算当前订单" : "开始收银") : "员工登录";
+  els.shiftStatusText.textContent = currentShift && !currentShift.closedAt
+    ? `班次：${new Date(currentShift.openedAt).toLocaleString()} 开始`
+    : "未开班";
+  els.closeShiftBtn.disabled = !currentShift || Boolean(currentShift.closedAt);
   els.operatorLogoutBtn.classList.toggle("hidden", !operator);
   els.operatorMessage.classList.toggle("error", Boolean(operator && !allowed));
   if (allowed) {
@@ -562,6 +642,7 @@ function loginOperator(event) {
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   els.operatorEmailInput.value = "";
   cart = [];
+  ensureCurrentShift();
   renderAll();
 }
 
@@ -572,6 +653,7 @@ function logoutCloudIfReady() {
 }
 
 function logoutOperator() {
+  if (currentShift && !currentShift.closedAt && !confirm("当前班次尚未结束，确定退出收银吗？")) return;
   operatorEmail = "";
   localStorage.removeItem(STORAGE_KEYS.operatorEmail);
   logoutCloudIfReady();
@@ -900,6 +982,7 @@ function applyCloudUser(appUser) {
   currentBranchId = appUser.branchId || "hq";
   localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+  ensureCurrentShift();
   updateCloudStatus(`云端已登录：${appUser.email}`, true);
   loadCloudData();
   syncPendingChanges();
@@ -1005,6 +1088,24 @@ function renderManagementLists() {
     </div>
   `;
   els.syncOverview.append(syncRow);
+
+  els.shiftList.innerHTML = "";
+  if (!shifts.length) {
+    els.shiftList.innerHTML = '<div class="empty">暂无交班记录</div>';
+  } else {
+    for (const shift of shifts.slice(0, 10)) {
+      const row = document.createElement("div");
+      row.className = "management-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(shift.operatorName || "-")} · ${escapeHtml(shift.branchName || "-")}</strong>
+          <small>${new Date(shift.openedAt).toLocaleString()} 至 ${shift.closedAt ? new Date(shift.closedAt).toLocaleString() : "-"}</small>
+        </div>
+        <small>${shift.summary?.orders || 0} 单 · ${money(shift.summary?.total || 0)}</small>
+      `;
+      els.shiftList.append(row);
+    }
+  }
 
   els.auditList.innerHTML = "";
   const auditRows = [...auditLogs].slice(0, 10);
@@ -1663,6 +1764,7 @@ async function checkout() {
     els.paymentReferenceInput.focus();
     return;
   }
+  ensureCurrentShift();
 
   const createdAt = new Date();
   const serviceEnd = new Date(createdAt);
@@ -1674,6 +1776,7 @@ async function checkout() {
     branchId: currentBranchId,
     branchName: getBranchName(currentBranchId),
     operator: getOperator(),
+    shiftId: currentShift?.id || "",
     customer: {
       name: els.customerNameInput.value.trim(),
       phone: els.customerPhoneInput.value.trim()
@@ -1823,6 +1926,7 @@ function renderSales() {
       <span class="product-meta">状态：${getSaleStatusText(sale)}</span>
       <span class="product-meta">分行：${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))}</span>
       <span class="product-meta">收银员：${escapeHtml(sale.operator?.name || "-")}</span>
+      <span class="product-meta">班次：${escapeHtml(sale.shiftId || "-")}</span>
       <span class="product-meta">同步：${pendingSales.some((item) => item.id === sale.id) ? "待同步" : "已处理"}</span>
       <span class="product-meta">付款：${escapeHtml(sale.payment?.method || "现金")}${sale.payment?.reference ? ` · ${escapeHtml(sale.payment.reference)}` : ""}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
@@ -2027,10 +2131,11 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "付款方式", "付款参考号", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "班次号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "付款方式", "付款参考号", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
+      sale.shiftId || "",
       getSaleStatusText(sale),
       sale.voidedAt ? new Date(sale.voidedAt).toLocaleString() : "",
       sale.branchName || getBranchName(sale.branchId || "hq"),
@@ -2245,6 +2350,28 @@ function exportStockAdjustments() {
   downloadCsv(`stock-adjustments-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 }
 
+function exportShifts() {
+  if (!requireAdmin()) return;
+  if (!shifts.length) {
+    alert("还没有交班记录可以导出。");
+    return;
+  }
+  const rows = [["班次号", "分行", "操作员", "开始时间", "结束时间", "订单数", "总金额", "付款汇总"]];
+  for (const shift of shifts) {
+    rows.push([
+      shift.id,
+      shift.branchName || getBranchName(shift.branchId || "hq"),
+      shift.operatorName || "",
+      shift.openedAt ? new Date(shift.openedAt).toLocaleString() : "",
+      shift.closedAt ? new Date(shift.closedAt).toLocaleString() : "",
+      shift.summary?.orders || 0,
+      shift.summary?.total || 0,
+      (shift.summary?.payments || []).map((item) => `${item.method}: ${money(item.total)} (${item.orders}单)`).join("; ")
+    ]);
+  }
+  downloadCsv(`shifts-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
 function exportBackup() {
   if (!requireAdmin()) return;
   const backup = {
@@ -2261,6 +2388,8 @@ function exportBackup() {
     pendingAuditLogs,
     stockAdjustments,
     auditLogs,
+    currentShift,
+    shifts,
     preferences: {
       paymentMethod: preferredPaymentMethod
     }
@@ -2297,6 +2426,8 @@ function restoreBackupFile(file) {
       pendingAuditLogs = Array.isArray(backup.pendingAuditLogs) ? backup.pendingAuditLogs : [];
       stockAdjustments = Array.isArray(backup.stockAdjustments) ? backup.stockAdjustments : [];
       auditLogs = Array.isArray(backup.auditLogs) ? backup.auditLogs : [];
+      currentShift = backup.currentShift || null;
+      shifts = Array.isArray(backup.shifts) ? backup.shifts : [];
       appSettings = backup.settings || defaultSettings;
       preferredPaymentMethod = backup.preferences?.paymentMethod || preferredPaymentMethod;
       paymentMethodInitialized = false;
@@ -2312,6 +2443,8 @@ function restoreBackupFile(file) {
       savePendingAuditLogs();
       save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
       save(STORAGE_KEYS.auditLogs, auditLogs);
+      saveCurrentShift();
+      saveShifts();
       save(STORAGE_KEYS.settings, appSettings);
       localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
       migrateManagementData();
@@ -2372,11 +2505,15 @@ function resetAllData() {
   pendingAuditLogs = [];
   stockAdjustments = [];
   auditLogs = [];
+  currentShift = null;
+  shifts = [];
   savePendingProducts();
   savePendingStockAdjustments();
   savePendingAuditLogs();
   save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
   save(STORAGE_KEYS.auditLogs, auditLogs);
+  saveCurrentShift();
+  saveShifts();
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   writeAuditLog("data.reset", {});
@@ -2425,6 +2562,7 @@ els.branchSelect.addEventListener("change", () => {
 els.operatorLoginForm.addEventListener("submit", loginOperator);
 els.googleLoginBtn.addEventListener("click", signInWithGoogle);
 els.operatorLogoutBtn.addEventListener("click", logoutOperator);
+els.closeShiftBtn.addEventListener("click", closeCurrentShift);
 els.clearCartBtn.addEventListener("click", () => {
   cart = [];
   autoFillPaid = true;
@@ -2489,6 +2627,7 @@ els.exportInventoryBtn.addEventListener("click", exportInventory);
 els.exportCustomersBtn.addEventListener("click", exportCustomers);
 els.exportAuditBtn.addEventListener("click", exportAuditLogs);
 els.exportStockBtn.addEventListener("click", exportStockAdjustments);
+els.exportShiftsBtn.addEventListener("click", exportShifts);
 els.backupBtn.addEventListener("click", exportBackup);
 els.restoreBtn.addEventListener("click", () => els.restoreInput.click());
 els.restoreInput.addEventListener("change", () => {
