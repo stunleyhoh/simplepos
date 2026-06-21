@@ -17,7 +17,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.31";
+const APP_VERSION = "v0.32";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -61,6 +61,15 @@ let reportRangeInitialized = false;
 let autoFillPaid = true;
 let currentView = "order";
 
+const VIEW_META = {
+  order: { title: "下单", subtitle: "选择商品并完成当前订单" },
+  menu: { title: "菜单管理", subtitle: "新增商品或调整当前分行库存" },
+  inventory: { title: "库存", subtitle: "查看库存流水和低库存提醒" },
+  transactions: { title: "转账记录", subtitle: "查看销售记录、客户跟进和收款状态" },
+  report: { title: "报告", subtitle: "查看全局指标、分行表现和销售趋势" },
+  settings: { title: "设置", subtitle: "管理分行、员工、同步、备份和业务设置" }
+};
+
 function setAppView(view) {
   currentView = view;
   document.body.dataset.view = view;
@@ -69,9 +78,16 @@ function setAppView(view) {
   }
   els.appMenu.classList.remove("open");
   els.menuToggleBtn.setAttribute("aria-expanded", "false");
+  updateViewHeadings();
   if (view !== "order" && !isAdmin()) {
     els.adminLoginMessage.textContent = "请先进入后台，才能查看这个功能。";
   }
+}
+
+function updateViewHeadings() {
+  const meta = VIEW_META[currentView] || VIEW_META.order;
+  if (els.adminTitle) els.adminTitle.textContent = meta.title;
+  if (els.adminSubtitle) els.adminSubtitle.textContent = meta.subtitle;
 }
 
 const els = {
@@ -81,6 +97,8 @@ const els = {
   operatorStatus: document.querySelector("#operatorStatus"),
   adminStatus: document.querySelector("#adminStatus"),
   versionStatus: document.querySelector("#versionStatus"),
+  adminTitle: document.querySelector("#adminTitle"),
+  adminSubtitle: document.querySelector("#adminSubtitle"),
   appMenu: document.querySelector("#appMenu"),
   menuToggleBtn: document.querySelector("#menuToggleBtn"),
   cashierMenu: document.querySelector("#cashierMenu"),
@@ -2067,6 +2085,15 @@ els.cashierToggleBtn.addEventListener("click", () => {
   if (open) {
     els.appMenu.classList.remove("open");
     els.menuToggleBtn.setAttribute("aria-expanded", "false");
+  }
+});
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!els.appMenu.contains(target) && !els.cashierMenu.contains(target)) {
+    els.appMenu.classList.remove("open");
+    els.cashierMenu.classList.remove("open");
+    els.menuToggleBtn.setAttribute("aria-expanded", "false");
+    els.cashierToggleBtn.setAttribute("aria-expanded", "false");
   }
 });
 for (const button of document.querySelectorAll("[data-app-view]")) {
