@@ -1,10 +1,10 @@
-const CACHE_NAME = "simple-pos-v11";
+const CACHE_NAME = "simple-pos-v26";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
-  "./firebase-config.local.js",
+  "./firebase-config.js",
   "./firebase-cloud.js",
   "./manifest.webmanifest"
 ];

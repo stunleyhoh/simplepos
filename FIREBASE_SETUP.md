@@ -120,6 +120,7 @@ sales
 - 管理员可以查看全部分行和全部订单。
 - 授权员工只能查看和收银自己所属分行。
 - 未授权邮箱即使 Google 登录成功，也不能进入 POS。
+- 授权员工只能同步库存和订单，不能修改商品名称、价格、分类和 SKU。
 
 ## 第 7 步：下一步你要发给我的资料
 
@@ -150,6 +151,7 @@ sales
 - 收款后尝试同步销售记录到 Firestore
 - 断网收款会进入待同步队列
 - 恢复网络后自动补传待同步订单
+- 在线收款使用 Firestore transaction 同时写订单和扣库存
 - 新增分行时尝试同步到 Firestore
 - 授权用户时尝试同步到 Firestore
 - 后台一键初始化云端数据
@@ -196,6 +198,7 @@ Google 管理员登录成功后，在后台点击：
 - 分行
 - 授权 POS 用户
 - 商品和各分行库存
+- 业务设置
 
 成功后，Firebase Console 的 Firestore 里应该能看到这些集合：
 
@@ -203,6 +206,7 @@ Google 管理员登录成功后，在后台点击：
 branches
 users
 products
+settings
 ```
 
 之后你完成一笔收款，Firestore 里还会出现：
@@ -242,7 +246,7 @@ firebase deploy
 https://simplepos-2900e.web.app
 ```
 
-提醒：上线前要确保部署环境包含 `firebase-config.local.js`，或者把同等配置放进部署版本，否则网页无法连接 Firebase。
+提醒：上线前要确保部署环境包含 `firebase-config.local.js`，或者把同等真实配置放进部署版本的 `firebase-config.js`，否则网页无法连接 Firebase。
 
 ## GitHub Secret Scanning 提醒
 
@@ -273,4 +277,4 @@ firebase-config.local.js
 1. 到 Google Cloud Console 限制 API Key，只允许你的网站域名使用。
 2. GitHub alert 里如果确认只是 Firebase Web API Key，可以在处理完限制后标记为 resolved / false positive。
 
-正式上线时，部署环境仍然需要有 `firebase-config.local.js` 或等效配置文件，否则网页无法连接 Firebase。
+正式上线时，部署环境仍然需要有 `firebase-config.local.js`，或者把同等真实配置放进部署版本的 `firebase-config.js`，否则网页无法连接 Firebase。

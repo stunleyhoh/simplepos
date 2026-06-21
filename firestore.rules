@@ -37,13 +37,28 @@ service cloud.firestore {
 
     match /products/{productId} {
       allow read: if isActiveCashier();
-      allow create, update, delete: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (
+          isActiveCashier()
+          && request.resource.data.name == resource.data.name
+          && request.resource.data.barcode == resource.data.barcode
+          && request.resource.data.category == resource.data.category
+          && request.resource.data.price == resource.data.price
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(["branchStock", "stock", "updatedAt", "active"])
+        );
     }
 
     match /sales/{saleId} {
       allow read: if isAdmin() || sameBranch(resource.data.branchId);
       allow create: if isAdmin() || sameBranch(request.resource.data.branchId);
       allow update, delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isActiveCashier();
+      allow create, update, delete: if isAdmin();
     }
   }
 }

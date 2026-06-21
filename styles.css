@@ -124,6 +124,7 @@ h2 {
 .operator-login,
 .branch-form,
 .user-form,
+.settings-form,
 .admin-actions {
   display: flex;
   gap: 10px;
@@ -297,7 +298,8 @@ select {
 .operator-login input,
 .branch-form input,
 .user-form input,
-.user-form select {
+.user-form select,
+.settings-form input {
   flex: 1 1 240px;
 }
 

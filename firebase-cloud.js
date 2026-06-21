@@ -12,10 +12,28 @@ import {
   getDoc,
   getDocs,
   getFirestore,
+  query,
+  runTransaction,
   serverTimestamp,
-  setDoc
+  setDoc,
+  where
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-import { adminEmail, firebaseConfig } from "./firebase-config.local.js";
+
+let configModule;
+try {
+  configModule = await import("./firebase-config.local.js");
+} catch {
+  configModule = await import("./firebase-config.js");
+}
+
+const { adminEmail, firebaseConfig } = configModule;
+
+if (!firebaseConfig.apiKey || firebaseConfig.apiKey.startsWith("YOUR_")) {
+  window.dispatchEvent(new CustomEvent("cloud-error", {
+    detail: { message: "Firebase config is missing. Create firebase-config.local.js." }
+  }));
+  throw new Error("Firebase config is missing. Create firebase-config.local.js.");
+}
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -64,6 +82,25 @@ async function loadAllData() {
   return { branches, users, products, sales };
 }
 
+async function loadUserData(appUser) {
+  if (!appUser) return { branches: [], users: [], products: [], sales: [] };
+  if (appUser.role === "admin" || normalizeEmail(appUser.email) === adminEmail) {
+    return loadAllData();
+  }
+
+  const [branches, products, salesSnapshot] = await Promise.all([
+    loadCollection("branches"),
+    loadCollection("products"),
+    getDocs(query(collection(db, "sales"), where("branchId", "==", appUser.branchId)))
+  ]);
+  return {
+    branches,
+    users: [appUser],
+    products,
+    sales: salesSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+  };
+}
+
 async function saveBranch(branch) {
   await setDoc(doc(db, "branches", branch.id), {
     ...branch,
@@ -90,12 +127,59 @@ async function saveProduct(product) {
   }, { merge: true });
 }
 
+async function saveSettings(settings) {
+  await setDoc(doc(db, "settings", "app"), {
+    ...settings,
+    updatedAt: serverTimestamp()
+  }, { merge: true });
+}
+
+async function loadSettings() {
+  const snapshot = await getDoc(doc(db, "settings", "app"));
+  return snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null;
+}
+
 async function saveSale(sale) {
   await setDoc(doc(db, "sales", sale.id), {
     ...sale,
     syncStatus: "synced",
     syncedAt: serverTimestamp()
   }, { merge: true });
+}
+
+async function saveCheckout(sale) {
+  await runTransaction(db, async (transaction) => {
+    const productRefs = sale.items.map((item) => doc(db, "products", item.id));
+    const snapshots = [];
+    for (const productRef of productRefs) {
+      snapshots.push(await transaction.get(productRef));
+    }
+
+    snapshots.forEach((snapshot, index) => {
+      if (!snapshot.exists()) {
+        throw new Error(`商品不存在：${sale.items[index].name}`);
+      }
+      const item = sale.items[index];
+      const product = snapshot.data();
+      const branchStock = { ...(product.branchStock || {}) };
+      const currentStock = Number(branchStock[sale.branchId] || 0);
+      if (currentStock < item.qty) {
+        throw new Error(`${item.name} 库存不足，当前库存 ${currentStock}`);
+      }
+      branchStock[sale.branchId] = currentStock - item.qty;
+      transaction.update(snapshot.ref, {
+        branchStock,
+        stock: sale.branchId === "hq" ? branchStock[sale.branchId] : product.stock,
+        updatedAt: serverTimestamp()
+      });
+    });
+
+    transaction.set(doc(db, "sales", sale.id), {
+      ...sale,
+      syncStatus: "synced",
+      syncedAt: serverTimestamp()
+    }, { merge: true });
+  });
 }
 
 async function signInWithGoogle() {
@@ -114,10 +198,14 @@ window.cloudPOS = {
   getCloudUser,
   loadCollection,
   loadAllData,
+  loadUserData,
   saveBranch,
   saveAuthorizedUser,
   saveProduct,
-  saveSale
+  saveSettings,
+  loadSettings,
+  saveSale,
+  saveCheckout
 };
 
 onAuthStateChanged(auth, async (firebaseUser) => {

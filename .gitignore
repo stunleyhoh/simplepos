@@ -1,3 +1,6 @@
 firebase-config.local.js
 server.log
 server.err.log
+firebase-debug.log
+firestore-debug.log
+ui-debug.log

@@ -20,6 +20,7 @@
       <span id="branchStatus" class="status">总店</span>
       <span id="operatorStatus" class="status">POS未登录</span>
       <span id="adminStatus" class="status">后台未登录</span>
+      <span id="versionStatus" class="status">版本检测中</span>
       <button id="installBtn" class="ghost hidden" type="button">安装到电脑</button>
     </div>
   </header>
@@ -141,6 +142,32 @@
         </div>
 
         <div class="panel-subsection">
+          <h3>同步状态</h3>
+          <div id="syncOverview" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
+          <h3>客户跟进</h3>
+          <div id="followUpList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
+          <h3>低库存提醒</h3>
+          <div id="lowStockList" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection">
+          <h3>业务设置</h3>
+          <form id="settingsForm" class="settings-form">
+            <input id="businessNameInput" required placeholder="品牌 / 小票标题">
+            <input id="defaultServiceNameInput" required placeholder="默认计划名称">
+            <input id="serviceDaysInput" required type="number" min="1" step="1" placeholder="服务天数">
+            <input id="receiptFooterInput" required placeholder="小票结尾">
+            <button class="primary" type="submit">保存设置</button>
+          </form>
+        </div>
+
+        <div class="panel-subsection">
           <h3>开设新分行</h3>
           <form id="branchForm" class="branch-form">
             <input id="branchNameInput" required placeholder="分行名称，例如：槟城分行">
@@ -171,7 +198,11 @@
 
         <div class="admin-actions">
           <button id="initCloudBtn" class="ghost" type="button">初始化云端数据</button>
+          <button id="syncPendingBtn" class="ghost" type="button">补传离线订单</button>
           <button id="exportBtn" class="ghost" type="button">导出销售记录</button>
+          <button id="backupBtn" class="ghost" type="button">导出完整备份</button>
+          <button id="restoreBtn" class="ghost danger" type="button">从备份恢复</button>
+          <input id="restoreInput" class="hidden" type="file" accept="application/json">
           <button id="resetDataBtn" class="ghost danger" type="button">清空全部数据</button>
         </div>
       </div>
