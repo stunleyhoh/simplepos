@@ -226,8 +226,9 @@
           <form id="userForm" class="user-form">
             <input id="userNameInput" required placeholder="使用者姓名">
             <input id="userEmailInput" required type="email" placeholder="使用者邮箱">
+            <input id="userPasswordInput" required type="password" minlength="6" autocomplete="new-password" placeholder="离线密码（至少 6 位）">
             <select id="userBranchSelect" required aria-label="授权分行"></select>
-            <button class="primary" type="submit">授权使用</button>
+            <button class="primary" type="submit">授权 / 更新</button>
           </form>
           <div id="userList" class="management-list"></div>
         </div>
@@ -326,8 +327,9 @@
       <form id="operatorLoginForm" class="operator-login">
         <strong>员工登录 / 登出</strong>
         <input id="operatorEmailInput" type="email" autocomplete="username" required placeholder="授权用户邮箱">
+        <input id="operatorPasswordInput" type="password" autocomplete="current-password" placeholder="离线密码（断网时使用）">
         <button class="primary" type="submit">登录收银</button>
-        <button id="googleLoginBtn" class="ghost" type="button">Google 登录</button>
+        <button id="googleLoginBtn" class="ghost" type="button">联网 Google 登录</button>
         <button id="operatorLogoutBtn" class="ghost hidden" type="button">退出收银</button>
         <p id="operatorMessage" class="form-message">请使用管理员授权的邮箱登录后收银。</p>
       </form>

@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.42";
+const APP_VERSION = "v0.43";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -128,6 +128,7 @@ const els = {
   clearCartBtn: document.querySelector("#clearCartBtn"),
   operatorLoginForm: document.querySelector("#operatorLoginForm"),
   operatorEmailInput: document.querySelector("#operatorEmailInput"),
+  operatorPasswordInput: document.querySelector("#operatorPasswordInput"),
   googleLoginBtn: document.querySelector("#googleLoginBtn"),
   operatorLogoutBtn: document.querySelector("#operatorLogoutBtn"),
   operatorMessage: document.querySelector("#operatorMessage"),
@@ -203,6 +204,7 @@ const els = {
   userForm: document.querySelector("#userForm"),
   userNameInput: document.querySelector("#userNameInput"),
   userEmailInput: document.querySelector("#userEmailInput"),
+  userPasswordInput: document.querySelector("#userPasswordInput"),
   userBranchSelect: document.querySelector("#userBranchSelect"),
   userList: document.querySelector("#userList"),
   salesSummary: document.querySelector("#salesSummary"),
@@ -329,7 +331,7 @@ function savePendingAuditLogs() {
 }
 
 function getCurrentActor() {
-  return currentCloudUser || getOperator() || { email: adminEmail || operatorEmail || "", name: "本机用户" };
+  return currentCloudUser || getActiveCashier() || { email: adminEmail || operatorEmail || "", name: "本机用户" };
 }
 
 function queuePendingAuditLog(log) {
@@ -391,6 +393,21 @@ async function sha256Hex(value) {
 
 async function isConfiguredAdminEmail(email) {
   return sha256Hex(normalizeEmail(email)).then((hash) => hash === ADMIN_EMAIL_HASH);
+}
+
+function createPasswordSalt() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function hashOfflinePassword(email, password, salt) {
+  return sha256Hex(`${salt}:${normalizeEmail(email)}:${password}`);
+}
+
+async function verifyOfflinePassword(user, password) {
+  if (!user?.offlinePasswordHash || !user?.offlinePasswordSalt) return false;
+  const hash = await hashOfflinePassword(user.email, password, user.offlinePasswordSalt);
+  return hash === user.offlinePasswordHash;
 }
 
 function ensureAdminAuthorized(email) {
@@ -486,6 +503,12 @@ function migrateManagementData() {
 }
 
 function renderBranchSelect() {
+  enforceBranchAccess();
+  if (!branches.some((branch) => branch.id === currentBranchId)) {
+    currentBranchId = "hq";
+    localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+    cart = [];
+  }
   els.branchSelect.innerHTML = "";
   for (const branch of branches) {
     const option = document.createElement("option");
@@ -493,8 +516,12 @@ function renderBranchSelect() {
     option.textContent = branch.name;
     els.branchSelect.append(option);
   }
-  els.branchSelect.value = branches.some((branch) => branch.id === currentBranchId) ? currentBranchId : "hq";
+  els.branchSelect.value = currentBranchId;
   els.branchStatus.textContent = getBranchName(els.branchSelect.value);
+  els.branchSelect.disabled = isBranchLockedToOperator();
+  els.branchSelect.title = isBranchLockedToOperator()
+    ? "收银员只能使用授权分行；管理员登录后可切换全部分行。"
+    : "管理员可切换总店与所有分行。";
 }
 
 function renderAdminAccess() {
@@ -517,9 +544,42 @@ function getOperator() {
   return authorizedUsers.find((user) => normalizeEmail(user.email) === email && user.active !== false) || null;
 }
 
+function getAdminOperator() {
+  const email = normalizeEmail(adminEmail || currentCloudUser?.email);
+  if (!email || !isAdmin()) return null;
+  const savedAdmin = authorizedUsers.find((user) => normalizeEmail(user.email) === email && user.active !== false);
+  return {
+    id: savedAdmin?.id || "admin-user",
+    name: savedAdmin?.name || "管理员",
+    email,
+    branchId: currentBranchId,
+    role: "admin",
+    active: true
+  };
+}
+
+function getActiveCashier() {
+  return getAdminOperator() || getOperator();
+}
+
 function isOperatorAllowedForCurrentBranch() {
+  if (isAdmin()) return true;
   const operator = getOperator();
   return Boolean(operator && operator.branchId === currentBranchId);
+}
+
+function isBranchLockedToOperator() {
+  return Boolean(getOperator() && !isAdmin());
+}
+
+function enforceBranchAccess() {
+  if (isAdmin()) return;
+  const operator = getOperator();
+  if (operator && currentBranchId !== operator.branchId) {
+    currentBranchId = operator.branchId;
+    localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+    cart = [];
+  }
 }
 
 function saveCurrentShift() {
@@ -531,7 +591,7 @@ function saveShifts() {
 }
 
 function ensureCurrentShift() {
-  const operator = getOperator();
+  const operator = getActiveCashier();
   if (!operator) return;
   if (currentShift && !currentShift.closedAt && currentShift.operatorEmail === operator.email && currentShift.branchId === currentBranchId) return;
   currentShift = {
@@ -591,32 +651,37 @@ function closeCurrentShift() {
 }
 
 function renderOperatorAccess() {
-  const operator = getOperator();
+  const operator = getActiveCashier();
+  const posOperator = getOperator();
   const allowed = isOperatorAllowedForCurrentBranch();
   els.operatorStatus.textContent = allowed
     ? `收银：${operator.name}`
-    : operator
+    : posOperator
       ? "收银分行不匹配"
       : "POS未登录";
   els.operatorStatus.style.color = allowed ? "#0f766e" : "#66756f";
   els.cashierOperatorText.textContent = allowed
     ? `${operator.name} · ${getBranchName(operator.branchId)}`
-    : operator
-      ? `${operator.name} · 分行不匹配`
+    : posOperator
+      ? `${posOperator.name} · 分行不匹配`
       : "未登录";
   els.quickCheckoutBtn.textContent = allowed ? (cart.length ? "结算当前订单" : "开始收银") : "员工登录";
   els.shiftStatusText.textContent = currentShift && !currentShift.closedAt
     ? `班次：${new Date(currentShift.openedAt).toLocaleString()} 开始`
     : "未开班";
   els.closeShiftBtn.disabled = !currentShift || Boolean(currentShift.closedAt);
-  els.operatorLogoutBtn.classList.toggle("hidden", !operator);
-  els.operatorMessage.classList.toggle("error", Boolean(operator && !allowed));
-  if (allowed) {
-    els.operatorMessage.textContent = `${operator.name} 已授权使用 ${getBranchName(operator.branchId)} POS。`;
-  } else if (operator) {
-    els.operatorMessage.textContent = `${operator.name} 只被授权使用 ${getBranchName(operator.branchId)}，请切换分行或退出。`;
+  els.operatorLogoutBtn.classList.toggle("hidden", !posOperator);
+  els.operatorMessage.classList.toggle("error", Boolean(posOperator && !allowed));
+  if (isAdmin()) {
+    els.operatorMessage.textContent = `${operator.name} 拥有全局权限，可切换总店与所有分行。`;
+  } else if (allowed) {
+    els.operatorMessage.textContent = `${operator.name} 已授权使用 ${getBranchName(operator.branchId)} POS，分行已锁定。`;
+  } else if (posOperator) {
+    els.operatorMessage.textContent = `${posOperator.name} 只被授权使用 ${getBranchName(posOperator.branchId)}，系统已锁定该分行。`;
   } else {
-    els.operatorMessage.textContent = "请使用管理员授权的邮箱登录后收银。";
+    els.operatorMessage.textContent = navigator.onLine
+      ? "联网时请使用 Google 登录；断网时才使用电邮与离线密码。"
+      : "当前离线：请输入授权邮箱和离线密码。";
   }
 }
 
@@ -627,13 +692,29 @@ function requireOperator() {
   return false;
 }
 
-function loginOperator(event) {
+async function loginOperator(event) {
   event.preventDefault();
+  if (navigator.onLine) {
+    els.operatorMessage.textContent = "联网时请使用 Google 登录验证身份。";
+    els.operatorMessage.classList.remove("error");
+    await signInWithGoogle();
+    return;
+  }
+
   const email = normalizeEmail(els.operatorEmailInput.value);
+  const password = els.operatorPasswordInput.value;
   const user = authorizedUsers.find((item) => normalizeEmail(item.email) === email);
   if (!user) {
     els.operatorMessage.textContent = "此邮箱还没有被管理员授权使用 POS。";
     els.operatorMessage.classList.add("error");
+    return;
+  }
+  if (!password || !(await verifyOfflinePassword(user, password))) {
+    els.operatorMessage.textContent = user.offlinePasswordHash
+      ? "离线密码不正确。"
+      : "这个账号还没有设置离线密码，请联网后由管理员重新授权或更新。";
+    els.operatorMessage.classList.add("error");
+    els.operatorPasswordInput.focus();
     return;
   }
   operatorEmail = user.email;
@@ -641,6 +722,7 @@ function loginOperator(event) {
   localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   els.operatorEmailInput.value = "";
+  els.operatorPasswordInput.value = "";
   cart = [];
   ensureCurrentShift();
   renderAll();
@@ -889,7 +971,7 @@ async function loadCloudData() {
   if (!hasCloud() || !navigator.onLine) return false;
   try {
     updateCloudStatus("正在读取云端资料");
-    const data = await window.cloudPOS.loadUserData(getOperator());
+    const data = await window.cloudPOS.loadUserData(getActiveCashier());
     const cloudSettings = await window.cloudPOS.loadSettings();
     if (cloudSettings) {
       appSettings = { ...appSettings, ...cloudSettings };
@@ -976,10 +1058,12 @@ function applyCloudUser(appUser) {
     adminEmail = normalizeEmail(appUser.email);
     ensureAdminAuthorized(adminEmail);
     localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+    currentBranchId = branches.some((branch) => branch.id === currentBranchId) ? currentBranchId : "hq";
+  } else {
+    currentBranchId = appUser.branchId || "hq";
   }
 
   operatorEmail = appUser.email;
-  currentBranchId = appUser.branchId || "hq";
   localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   ensureCurrentShift();
@@ -1017,18 +1101,26 @@ async function loginAdmin(event) {
   adminEmail = email;
   ensureAdminAuthorized(email);
   localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+  if (!operatorEmail) {
+    operatorEmail = email;
+    localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+  }
   els.adminEmailInput.value = "";
-  renderAdminAccess();
-  renderGlobalDashboard();
+  renderAll();
 }
 
 function logoutAdmin() {
+  const previousAdminEmail = normalizeEmail(adminEmail);
   adminEmail = "";
   localStorage.removeItem(STORAGE_KEYS.adminEmail);
+  if (previousAdminEmail && normalizeEmail(operatorEmail) === previousAdminEmail) {
+    operatorEmail = "";
+    localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+  }
   els.adminLoginMessage.textContent = "商品管理、导出销售记录和清空数据仅管理员可用。";
   els.adminLoginMessage.classList.remove("error");
   logoutCloudIfReady();
-  renderAdminAccess();
+  renderAll();
 }
 
 function createSlug(value) {
@@ -1066,10 +1158,11 @@ function renderManagementLists() {
   for (const user of authorizedUsers.filter((item) => item.active !== false)) {
     const row = document.createElement("div");
     row.className = "management-row";
+    const offlineText = user.offlinePasswordHash ? "已设离线密码" : "未设离线密码";
     row.innerHTML = `
       <div>
         <strong>${escapeHtml(user.name)}</strong>
-        <small>${escapeHtml(user.email)} · ${escapeHtml(getBranchName(user.branchId))} · ${escapeHtml(user.role || "POS用户")}</small>
+        <small>${escapeHtml(user.email)} · ${escapeHtml(getBranchName(user.branchId))} · ${escapeHtml(user.role || "POS用户")} · ${offlineText}</small>
       </div>
       <button class="ghost danger" type="button" ${user.role === "管理员" || user.role === "admin" ? "disabled" : ""}>移除</button>
     `;
@@ -1165,25 +1258,40 @@ function addBranch(event) {
   renderAll();
 }
 
-function addAuthorizedUser(event) {
+async function addAuthorizedUser(event) {
   event.preventDefault();
   if (!requireAdmin()) return;
   const email = normalizeEmail(els.userEmailInput.value);
-  if (authorizedUsers.some((user) => normalizeEmail(user.email) === email)) {
-    alert("这个邮箱已经被授权。");
+  const offlinePassword = els.userPasswordInput.value;
+  if (offlinePassword.length < 6) {
+    alert("离线密码至少需要 6 位。");
+    els.userPasswordInput.focus();
+    return;
+  }
+  const offlinePasswordSalt = createPasswordSalt();
+  const existingUser = authorizedUsers.find((user) => normalizeEmail(user.email) === email);
+  if (existingUser && (existingUser.role === "管理员" || existingUser.role === "admin")) {
+    alert("管理员账号不能在这里更新。");
     return;
   }
   const user = {
-    id: createId(),
+    id: existingUser?.id || createId(),
     name: els.userNameInput.value.trim(),
     email,
     branchId: els.userBranchSelect.value,
-    role: "POS用户"
+    role: "POS用户",
+    active: true,
+    offlinePasswordSalt,
+    offlinePasswordHash: await hashOfflinePassword(email, offlinePassword, offlinePasswordSalt)
   };
-  authorizedUsers.push(user);
+  if (existingUser) {
+    authorizedUsers = authorizedUsers.map((item) => normalizeEmail(item.email) === email ? user : item);
+  } else {
+    authorizedUsers.push(user);
+  }
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   if (hasCloud()) window.cloudPOS.saveAuthorizedUser(user).catch((error) => console.warn("User cloud sync failed", error));
-  writeAuditLog("user.authorize", { email: user.email, name: user.name, branchId: user.branchId });
+  writeAuditLog(existingUser ? "user.update" : "user.authorize", { email: user.email, name: user.name, branchId: user.branchId });
   els.userForm.reset();
   renderAll();
 }
@@ -1765,6 +1873,7 @@ async function checkout() {
     return;
   }
   ensureCurrentShift();
+  const cashier = getActiveCashier();
 
   const createdAt = new Date();
   const serviceEnd = new Date(createdAt);
@@ -1775,7 +1884,7 @@ async function checkout() {
     createdAt: createdAt.toISOString(),
     branchId: currentBranchId,
     branchName: getBranchName(currentBranchId),
-    operator: getOperator(),
+    operator: cashier,
     shiftId: currentShift?.id || "",
     customer: {
       name: els.customerNameInput.value.trim(),
@@ -2554,6 +2663,14 @@ for (const button of document.querySelectorAll("[data-app-view]")) {
   button.addEventListener("click", () => setAppView(button.dataset.appView));
 }
 els.branchSelect.addEventListener("change", () => {
+  if (isBranchLockedToOperator()) {
+    const operator = getOperator();
+    currentBranchId = operator.branchId;
+    localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+    alert(`此收银员只被授权使用 ${getBranchName(operator.branchId)}，不能切换到其他分行。`);
+    renderAll();
+    return;
+  }
   currentBranchId = els.branchSelect.value;
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   cart = [];
