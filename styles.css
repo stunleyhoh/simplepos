@@ -386,7 +386,7 @@ body[data-view="order"] .totals {
 }
 
 .quick-paid-buttons {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .quick-payment-buttons {
@@ -424,6 +424,11 @@ body[data-view="order"] #checkoutBtn {
   display: grid;
   gap: 8px;
   color: var(--muted);
+}
+
+.custom-paid-panel {
+  display: grid;
+  gap: 8px;
 }
 
 .payment-due {

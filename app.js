@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.52";
+const APP_VERSION = "v0.53";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -138,6 +138,7 @@ const els = {
   customerNameInput: document.querySelector("#customerNameInput"),
   customerPhoneInput: document.querySelector("#customerPhoneInput"),
   discountInput: document.querySelector("#discountInput"),
+  customPaidPanel: document.querySelector("#customPaidPanel"),
   paidInput: document.querySelector("#paidInput"),
   quickPaidButtons: document.querySelector("#quickPaidButtons"),
   paymentMethodInput: document.querySelector("#paymentMethodInput"),
@@ -2021,11 +2022,10 @@ function openPaymentDialog() {
   if (!cart.length) return;
   if (!requireOperator()) return;
   autoFillPaid = true;
+  els.customPaidPanel.classList.add("hidden");
   renderCart();
   updatePaymentPreview();
   els.paymentDialog.showModal();
-  els.paidInput.focus();
-  els.paidInput.select();
 }
 
 async function checkout() {
@@ -2850,6 +2850,13 @@ els.paidInput.addEventListener("input", () => {
 els.quickPaidButtons.addEventListener("click", (event) => {
   const button = event.target.closest("[data-quick-paid]");
   if (!button) return;
+  if (button.dataset.quickPaid === "custom") {
+    els.customPaidPanel.classList.remove("hidden");
+    els.paidInput.focus();
+    els.paidInput.select();
+    return;
+  }
+  els.customPaidPanel.classList.add("hidden");
   const value = button.dataset.quickPaid === "due" ? getCartDueAmount() : Number(button.dataset.quickPaid);
   els.paidInput.value = Number(value || 0).toFixed(2);
   autoFillPaid = false;
