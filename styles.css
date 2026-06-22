@@ -473,19 +473,27 @@ select {
 }
 
 .inventory-row {
-  align-items: flex-start;
+  align-items: center;
 }
 
-.branch-stock-actions {
+.inventory-toolbar {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
   gap: 8px;
 }
 
-.branch-stock-actions .ghost {
+.inventory-toolbar select {
+  flex: 0 1 220px;
+}
+
+.inventory-toolbar input {
+  flex: 1 1 260px;
+}
+
+.stock-adjust-button {
   min-height: 36px;
   padding: 7px 10px;
+  white-space: nowrap;
 }
 
 .sales-list {

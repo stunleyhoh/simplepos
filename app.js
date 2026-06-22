@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.48";
+const APP_VERSION = "v0.49";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -71,7 +71,7 @@ let showMoreSales = false;
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
-  menu: { title: "菜单管理", subtitle: "新增商品或调整当前分行库存" },
+  menu: { title: "菜单管理", subtitle: "新增商品和维护售价，库存请到库存页调整" },
   inventory: { title: "库存", subtitle: "查看库存流水和低库存提醒" },
   transactions: { title: "转账记录", subtitle: "查看销售记录、客户跟进和收款状态" },
   report: { title: "报告", subtitle: "查看全局指标、分行表现和销售趋势" },
@@ -153,7 +153,6 @@ const els = {
   barcodeInput: document.querySelector("#barcodeInput"),
   categoryInput: document.querySelector("#categoryInput"),
   priceInput: document.querySelector("#priceInput"),
-  stockInput: document.querySelector("#stockInput"),
   initCloudBtn: document.querySelector("#initCloudBtn"),
   syncPendingBtn: document.querySelector("#syncPendingBtn"),
   exportBtn: document.querySelector("#exportBtn"),
@@ -184,6 +183,7 @@ const els = {
   paymentSummaryList: document.querySelector("#paymentSummaryList"),
   menuSearchInput: document.querySelector("#menuSearchInput"),
   menuProductList: document.querySelector("#menuProductList"),
+  inventoryBranchFilter: document.querySelector("#inventoryBranchFilter"),
   inventorySearchInput: document.querySelector("#inventorySearchInput"),
   inventoryOverviewList: document.querySelector("#inventoryOverviewList"),
   syncOverview: document.querySelector("#syncOverview"),
@@ -1468,6 +1468,7 @@ function renderAll() {
     paymentMethodInitialized = true;
   }
   renderBranchSelect();
+  renderInventoryBranchFilter();
   renderCategoryFilter();
   renderProducts();
   renderCart();
@@ -1482,6 +1483,21 @@ function renderAll() {
   renderAdminAccess();
   renderOperatorAccess();
   updateNetworkStatus();
+}
+
+function renderInventoryBranchFilter() {
+  if (!els.inventoryBranchFilter) return;
+  const selectedBranchId = resolveBranchId(els.inventoryBranchFilter.value) || currentBranchId || "hq";
+  els.inventoryBranchFilter.innerHTML = "";
+  for (const branch of branches) {
+    const option = document.createElement("option");
+    option.value = branch.id;
+    option.textContent = branch.name;
+    els.inventoryBranchFilter.append(option);
+  }
+  els.inventoryBranchFilter.value = branches.some((branch) => branch.id === selectedBranchId)
+    ? selectedBranchId
+    : (branches[0]?.id || "hq");
 }
 
 function renderMenuProductList() {
@@ -1517,13 +1533,14 @@ function fillProductForm(product) {
   els.barcodeInput.value = product.barcode || "";
   els.categoryInput.value = product.category || "";
   els.priceInput.value = Number(product.price || 0);
-  els.stockInput.value = getBranchStock(product);
   els.nameInput.focus();
 }
 
 function renderInventoryOverview() {
   if (!isAdmin()) return;
   els.inventoryOverviewList.innerHTML = "";
+  const selectedBranchId = resolveBranchId(els.inventoryBranchFilter.value) || currentBranchId || "hq";
+  const selectedBranchName = getBranchName(selectedBranchId);
   const keyword = els.inventorySearchInput.value.trim().toLowerCase();
   const filteredProducts = products.filter((product) => {
     if (!keyword) return true;
@@ -1535,20 +1552,19 @@ function renderInventoryOverview() {
     return;
   }
   for (const product of filteredProducts.slice(0, 50)) {
+    const selectedStock = getBranchStock(product, selectedBranchId);
+    const totalStock = Object.values(normalizeProductBranches(product).branchStock || {})
+      .reduce((sum, stock) => sum + Number(stock || 0), 0);
     const row = document.createElement("div");
     row.className = "management-row inventory-row";
     row.innerHTML = `
       <div>
         <strong>${escapeHtml(product.name)}</strong>
-        <small>SKU ${escapeHtml(product.barcode || "-")} · ${escapeHtml(product.category || "-")}</small>
+        <small>${escapeHtml(selectedBranchName)} · SKU ${escapeHtml(product.barcode || "-")} · 总库存 ${totalStock}</small>
       </div>
-      <div class="branch-stock-actions">
-        ${branches.map((branch) => `
-          <button class="ghost" type="button" data-adjust-stock data-product-id="${escapeHtml(product.id)}" data-branch-id="${escapeHtml(branch.id)}">
-            ${escapeHtml(branch.name)}：${getBranchStock(product, branch.id)}
-          </button>
-        `).join("")}
-      </div>
+      <button class="ghost stock-adjust-button" type="button" data-adjust-stock data-product-id="${escapeHtml(product.id)}" data-branch-id="${escapeHtml(selectedBranchId)}">
+        库存 ${selectedStock} · 调整
+      </button>
     `;
     for (const button of row.querySelectorAll("[data-adjust-stock]")) {
       button.addEventListener("click", () => adjustInventoryStock(button.dataset.productId, button.dataset.branchId));
@@ -2267,7 +2283,6 @@ function renderGlobalDashboard() {
 function saveProduct(event) {
   event.preventDefault();
   if (!requireAdmin()) return;
-  const branchId = syncCurrentBranchFromSelect();
   products = products.map((item) => normalizeProductBranches(item));
   const product = {
     id: createId(),
@@ -2275,17 +2290,16 @@ function saveProduct(event) {
     barcode: els.barcodeInput.value.trim(),
     category: els.categoryInput.value.trim(),
     price: Number(els.priceInput.value),
-    stock: Number(els.stockInput.value),
-    branchStock: createBranchStock(els.stockInput.value, branchId)
+    stock: 0,
+    branchStock: createBranchStock(0, currentBranchId)
   };
-  if (!product.name || !product.category || product.price < 0 || product.stock < 0) {
+  if (!product.name || !product.category || product.price < 0) {
     alert("请检查商品信息。");
     return;
   }
 
   const sameBarcode = product.barcode && products.find((item) => item.barcode === product.barcode);
   let savedProduct = product;
-  const previousStock = sameBarcode ? getBranchStock(sameBarcode, branchId) : 0;
   if (sameBarcode) {
     products = products.map((item) => {
       if (item.id !== sameBarcode.id) return item;
@@ -2294,12 +2308,7 @@ function saveProduct(event) {
         name: product.name,
         barcode: product.barcode,
         category: product.category,
-        price: product.price,
-        stock: branchId === "hq" ? product.stock : item.stock,
-        branchStock: {
-          ...(item.branchStock || {}),
-          [branchId]: product.stock
-        }
+        price: product.price
       };
       savedProduct = normalizeProductBranches(savedProduct);
       return savedProduct;
@@ -2310,29 +2319,11 @@ function saveProduct(event) {
   }
   save(STORAGE_KEYS.products, products);
   syncProductToCloud(savedProduct);
-  const adjustment = {
-    id: `ADJ${Date.now()}`,
-    createdAt: new Date().toISOString(),
-    productId: savedProduct.id,
-    productName: savedProduct.name,
-    barcode: savedProduct.barcode,
-    branchId,
-    branchName: getBranchName(branchId),
-    beforeStock: previousStock,
-    afterStock: getBranchStock(savedProduct, branchId),
-    delta: getBranchStock(savedProduct, branchId) - previousStock,
-    reason: sameBarcode ? "管理员调整库存" : "管理员新增商品",
-    operator: currentCloudUser || { email: adminEmail || "", name: "管理员" }
-  };
-  recordStockAdjustment(adjustment);
-  syncStockAdjustmentToCloud(adjustment);
   writeAuditLog("product.save", {
     productId: savedProduct.id,
     productName: savedProduct.name,
     barcode: savedProduct.barcode,
-    branchId,
-    previousStock,
-    nextStock: adjustment.afterStock
+    price: savedProduct.price
   });
   els.productForm.reset();
   renderAll();
@@ -2803,6 +2794,7 @@ els.salesSearchInput.addEventListener("input", renderSales);
 els.salesPaymentFilter.addEventListener("change", renderSales);
 els.exportDailySettlementBtn.addEventListener("click", exportDailySettlement);
 els.menuSearchInput.addEventListener("input", renderMenuProductList);
+els.inventoryBranchFilter.addEventListener("change", renderInventoryOverview);
 els.inventorySearchInput.addEventListener("input", renderInventoryOverview);
 els.toggleSalesLimitBtn.addEventListener("click", () => {
   showMoreSales = !showMoreSales;

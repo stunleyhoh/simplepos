@@ -239,7 +239,6 @@
           <input id="barcodeInput" placeholder="条码 / SKU">
           <input id="categoryInput" required placeholder="分类">
           <input id="priceInput" required type="number" min="0" step="0.01" placeholder="售价">
-          <input id="stockInput" required type="number" min="0" step="1" placeholder="当前分行库存">
           <button class="primary" type="submit">保存商品</button>
         </form>
 
@@ -251,8 +250,11 @@
 
         <div class="panel-subsection" data-view-panel="inventory">
           <h3>库存总览</h3>
-          <p class="helper-text">点击各分行库存按钮，可直接调整该分行库存。</p>
-          <input id="inventorySearchInput" type="search" placeholder="搜索库存商品 / SKU / 分类">
+          <p class="helper-text">先选择分行，再点击商品右侧的库存按钮调整数量。</p>
+          <div class="inventory-toolbar">
+            <select id="inventoryBranchFilter" aria-label="库存分行筛选"></select>
+            <input id="inventorySearchInput" type="search" placeholder="搜索库存商品 / SKU / 分类">
+          </div>
           <div id="inventoryOverviewList" class="management-list"></div>
         </div>
 
