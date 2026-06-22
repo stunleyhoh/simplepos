@@ -472,6 +472,22 @@ select {
   padding: 7px 10px;
 }
 
+.inventory-row {
+  align-items: flex-start;
+}
+
+.branch-stock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.branch-stock-actions .ghost {
+  min-height: 36px;
+  padding: 7px 10px;
+}
+
 .sales-list {
   display: grid;
   gap: 10px;

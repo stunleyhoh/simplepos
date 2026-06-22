@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.47";
+const APP_VERSION = "v0.48";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -1535,21 +1535,80 @@ function renderInventoryOverview() {
     return;
   }
   for (const product of filteredProducts.slice(0, 50)) {
-    const branchText = branches
-      .map((branch) => `${branch.name}: ${getBranchStock(product, branch.id)}`)
-      .join(" · ");
-    const currentStock = getBranchStock(product, currentBranchId);
     const row = document.createElement("div");
-    row.className = "management-row";
+    row.className = "management-row inventory-row";
     row.innerHTML = `
       <div>
         <strong>${escapeHtml(product.name)}</strong>
-        <small>${escapeHtml(branchText)}</small>
+        <small>SKU ${escapeHtml(product.barcode || "-")} · ${escapeHtml(product.category || "-")}</small>
       </div>
-      <small>${escapeHtml(getBranchName(currentBranchId))} ${currentStock} · 总库存 ${Object.values(product.branchStock || {}).reduce((sum, stock) => sum + Number(stock || 0), 0)}</small>
+      <div class="branch-stock-actions">
+        ${branches.map((branch) => `
+          <button class="ghost" type="button" data-adjust-stock data-product-id="${escapeHtml(product.id)}" data-branch-id="${escapeHtml(branch.id)}">
+            ${escapeHtml(branch.name)}：${getBranchStock(product, branch.id)}
+          </button>
+        `).join("")}
+      </div>
     `;
+    for (const button of row.querySelectorAll("[data-adjust-stock]")) {
+      button.addEventListener("click", () => adjustInventoryStock(button.dataset.productId, button.dataset.branchId));
+    }
     els.inventoryOverviewList.append(row);
   }
+}
+
+function adjustInventoryStock(productId, branchId) {
+  if (!requireAdmin()) return;
+  const product = products.find((item) => item.id === productId);
+  const resolvedBranchId = resolveBranchId(branchId);
+  if (!product || !resolvedBranchId) {
+    alert("找不到商品或分行。");
+    return;
+  }
+  const beforeStock = getBranchStock(product, resolvedBranchId);
+  const input = prompt(`请输入 ${getBranchName(resolvedBranchId)} 的新库存数量。`, String(beforeStock));
+  if (input === null) return;
+  const nextStock = Number(input);
+  if (!Number.isFinite(nextStock) || nextStock < 0 || !Number.isInteger(nextStock)) {
+    alert("库存必须是 0 或以上的整数。");
+    return;
+  }
+  if (nextStock === beforeStock) return;
+
+  let savedProduct = product;
+  products = products.map((item) => {
+    if (item.id !== productId) return normalizeProductBranches(item);
+    savedProduct = normalizeProductBranches(setBranchStock(item, resolvedBranchId, nextStock));
+    return savedProduct;
+  });
+  save(STORAGE_KEYS.products, products);
+  syncProductToCloud(savedProduct);
+
+  const adjustment = {
+    id: `ADJ${Date.now()}`,
+    createdAt: new Date().toISOString(),
+    productId: savedProduct.id,
+    productName: savedProduct.name,
+    barcode: savedProduct.barcode,
+    branchId: resolvedBranchId,
+    branchName: getBranchName(resolvedBranchId),
+    beforeStock,
+    afterStock: nextStock,
+    delta: nextStock - beforeStock,
+    reason: "管理员库存页调整",
+    operator: currentCloudUser || { email: adminEmail || "", name: "管理员" }
+  };
+  recordStockAdjustment(adjustment);
+  syncStockAdjustmentToCloud(adjustment);
+  writeAuditLog("inventory.adjust", {
+    productId: savedProduct.id,
+    productName: savedProduct.name,
+    barcode: savedProduct.barcode,
+    branchId: resolvedBranchId,
+    previousStock: beforeStock,
+    nextStock
+  });
+  renderAll();
 }
 
 function renderSettingsForm() {
