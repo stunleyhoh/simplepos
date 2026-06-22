@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.46";
+const APP_VERSION = "v0.47";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -430,7 +430,49 @@ function ensureAdminAuthorized(email) {
 }
 
 function getBranchName(branchId) {
-  return branches.find((branch) => branch.id === branchId)?.name || "未知分行";
+  const branch = branches.find((item) => item.id === branchId || normalizeEmail(item.name) === normalizeEmail(branchId));
+  return branch?.name || "未知分行";
+}
+
+function resolveBranchId(value) {
+  const normalized = normalizeEmail(value);
+  if (!normalized) return "hq";
+  const branch = branches.find((item) => {
+    return normalizeEmail(item.id) === normalized
+      || normalizeEmail(item.name) === normalized
+      || createSlug(item.name) === normalized;
+  });
+  return branch?.id || "";
+}
+
+function normalizeBranchStock(branchStock = {}) {
+  const nextStock = Object.fromEntries(branches.map((branch) => [branch.id, 0]));
+  for (const [rawBranchId, rawStock] of Object.entries(branchStock || {})) {
+    const branchId = resolveBranchId(rawBranchId);
+    if (!branchId || !Object.hasOwn(nextStock, branchId)) continue;
+    nextStock[branchId] = Number(nextStock[branchId] || 0) + Number(rawStock || 0);
+  }
+  return nextStock;
+}
+
+function normalizeProductBranches(product) {
+  return {
+    ...product,
+    branchStock: normalizeBranchStock(product.branchStock || (product.stock ? { hq: product.stock } : {}))
+  };
+}
+
+function syncCurrentBranchFromSelect() {
+  enforceBranchAccess();
+  const selectedBranchId = resolveBranchId(els.branchSelect.value);
+  const fallbackBranchId = resolveBranchId(currentBranchId) || "hq";
+  if (!isBranchLockedToOperator()) {
+    currentBranchId = selectedBranchId || fallbackBranchId;
+  }
+  if (!branches.some((branch) => branch.id === currentBranchId)) currentBranchId = "hq";
+  localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+  if (els.branchSelect.value !== currentBranchId) els.branchSelect.value = currentBranchId;
+  return currentBranchId;
 }
 
 function getBranchStock(product, branchId = currentBranchId) {
@@ -469,17 +511,7 @@ function getTotalStock() {
 
 function migrateProductsForBranches() {
   products = products.map((product) => {
-    if (product.branchStock) {
-      const nextStock = { ...product.branchStock };
-      for (const branch of branches) {
-        if (!Object.hasOwn(nextStock, branch.id)) nextStock[branch.id] = 0;
-      }
-      return { ...product, branchStock: nextStock };
-    }
-    return {
-      ...product,
-      branchStock: createBranchStock(product.stock, "hq")
-    };
+    return normalizeProductBranches(product);
   });
   save(STORAGE_KEYS.products, products);
 }
@@ -497,6 +529,7 @@ function migrateManagementData() {
   appSettings = { ...defaultSettings, ...appSettings };
   if (!branches.length) branches = structuredClone(defaultBranches);
   if (!authorizedUsers.length) authorizedUsers = structuredClone(defaultAuthorizedUsers);
+  currentBranchId = resolveBranchId(currentBranchId) || currentBranchId;
   if (!branches.some((branch) => branch.id === currentBranchId)) {
     currentBranchId = "hq";
     localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
@@ -509,7 +542,7 @@ function migrateManagementData() {
 function renderBranchSelect() {
   enforceBranchAccess();
   if (!branches.some((branch) => branch.id === currentBranchId)) {
-    currentBranchId = "hq";
+    currentBranchId = resolveBranchId(currentBranchId) || "hq";
     localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
     cart = [];
   }
@@ -2175,6 +2208,8 @@ function renderGlobalDashboard() {
 function saveProduct(event) {
   event.preventDefault();
   if (!requireAdmin()) return;
+  const branchId = syncCurrentBranchFromSelect();
+  products = products.map((item) => normalizeProductBranches(item));
   const product = {
     id: createId(),
     name: els.nameInput.value.trim(),
@@ -2182,7 +2217,7 @@ function saveProduct(event) {
     category: els.categoryInput.value.trim(),
     price: Number(els.priceInput.value),
     stock: Number(els.stockInput.value),
-    branchStock: createBranchStock(els.stockInput.value, currentBranchId)
+    branchStock: createBranchStock(els.stockInput.value, branchId)
   };
   if (!product.name || !product.category || product.price < 0 || product.stock < 0) {
     alert("请检查商品信息。");
@@ -2191,7 +2226,7 @@ function saveProduct(event) {
 
   const sameBarcode = product.barcode && products.find((item) => item.barcode === product.barcode);
   let savedProduct = product;
-  const previousStock = sameBarcode ? getBranchStock(sameBarcode, currentBranchId) : 0;
+  const previousStock = sameBarcode ? getBranchStock(sameBarcode, branchId) : 0;
   if (sameBarcode) {
     products = products.map((item) => {
       if (item.id !== sameBarcode.id) return item;
@@ -2201,16 +2236,18 @@ function saveProduct(event) {
         barcode: product.barcode,
         category: product.category,
         price: product.price,
-        stock: currentBranchId === "hq" ? product.stock : item.stock,
+        stock: branchId === "hq" ? product.stock : item.stock,
         branchStock: {
           ...(item.branchStock || {}),
-          [currentBranchId]: product.stock
+          [branchId]: product.stock
         }
       };
+      savedProduct = normalizeProductBranches(savedProduct);
       return savedProduct;
     });
   } else {
-    products.unshift(product);
+    savedProduct = normalizeProductBranches(product);
+    products.unshift(savedProduct);
   }
   save(STORAGE_KEYS.products, products);
   syncProductToCloud(savedProduct);
@@ -2220,11 +2257,11 @@ function saveProduct(event) {
     productId: savedProduct.id,
     productName: savedProduct.name,
     barcode: savedProduct.barcode,
-    branchId: currentBranchId,
-    branchName: getBranchName(currentBranchId),
+    branchId,
+    branchName: getBranchName(branchId),
     beforeStock: previousStock,
-    afterStock: getBranchStock(savedProduct, currentBranchId),
-    delta: getBranchStock(savedProduct, currentBranchId) - previousStock,
+    afterStock: getBranchStock(savedProduct, branchId),
+    delta: getBranchStock(savedProduct, branchId) - previousStock,
     reason: sameBarcode ? "管理员调整库存" : "管理员新增商品",
     operator: currentCloudUser || { email: adminEmail || "", name: "管理员" }
   };
@@ -2234,7 +2271,7 @@ function saveProduct(event) {
     productId: savedProduct.id,
     productName: savedProduct.name,
     barcode: savedProduct.barcode,
-    branchId: currentBranchId,
+    branchId,
     previousStock,
     nextStock: adjustment.afterStock
   });
@@ -2679,8 +2716,7 @@ els.branchSelect.addEventListener("change", () => {
     renderAll();
     return;
   }
-  currentBranchId = els.branchSelect.value;
-  localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+  syncCurrentBranchFromSelect();
   cart = [];
   renderAll();
 });
