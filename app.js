@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.44";
+const APP_VERSION = "v0.45";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -680,8 +680,8 @@ function renderOperatorAccess() {
     els.operatorMessage.textContent = `${posOperator.name} 只被授权使用 ${getBranchName(posOperator.branchId)}，系统已锁定该分行。`;
   } else {
     els.operatorMessage.textContent = navigator.onLine
-      ? "联网时请使用 Google 登录；断网时才使用电邮与离线密码。"
-      : "当前离线：请输入授权邮箱和离线密码。";
+      ? "联网时请使用 Google 登录；离线密码由管理员在「设置 > 授权 POS 用户」设置。"
+      : "当前离线：请输入授权邮箱和离线密码。密码由管理员在「设置 > 授权 POS 用户」设置。";
   }
 }
 

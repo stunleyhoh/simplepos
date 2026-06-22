@@ -408,6 +408,12 @@ select {
   font-size: 16px;
 }
 
+.helper-text {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .branch-overview {
   display: grid;
   gap: 8px;
@@ -557,7 +563,7 @@ select {
   padding: 12px;
   background: #fff;
   box-shadow: var(--shadow);
-  max-height: calc(100dvh - 96px);
+  max-height: min(560px, calc(100dvh - 150px));
   overflow: auto;
   overscroll-behavior: contain;
 }
