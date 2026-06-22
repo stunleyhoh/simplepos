@@ -72,14 +72,23 @@ async function loadCollection(name) {
   return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
 }
 
+async function loadCollectionSafe(name) {
+  try {
+    return await loadCollection(name);
+  } catch (error) {
+    console.warn(`Cloud collection load skipped: ${name}`, error);
+    return [];
+  }
+}
+
 async function loadAllData() {
   const [branches, users, products, sales, stockAdjustments, auditLogs] = await Promise.all([
-    loadCollection("branches"),
-    loadCollection("users"),
-    loadCollection("products"),
-    loadCollection("sales"),
-    loadCollection("stockAdjustments"),
-    loadCollection("auditLogs")
+    loadCollectionSafe("branches"),
+    loadCollectionSafe("users"),
+    loadCollectionSafe("products"),
+    loadCollectionSafe("sales"),
+    loadCollectionSafe("stockAdjustments"),
+    loadCollectionSafe("auditLogs")
   ]);
   return { branches, users, products, sales, stockAdjustments, auditLogs };
 }
@@ -91,9 +100,12 @@ async function loadUserData(appUser) {
   }
 
   const [branches, products, salesSnapshot] = await Promise.all([
-    loadCollection("branches"),
-    loadCollection("products"),
-    getDocs(query(collection(db, "sales"), where("branchId", "==", appUser.branchId)))
+    loadCollectionSafe("branches"),
+    loadCollectionSafe("products"),
+    getDocs(query(collection(db, "sales"), where("branchId", "==", appUser.branchId))).catch((error) => {
+      console.warn("Cloud branch sales load skipped", error);
+      return { docs: [] };
+    })
   ]);
   return {
     branches,

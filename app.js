@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.45";
+const APP_VERSION = "v0.46";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -245,6 +245,10 @@ function updateCloudStatus(text, ok = false) {
   const pendingText = pendingCount ? ` · 待同步 ${pendingCount}` : "";
   els.cloudStatus.textContent = `${text}${pendingText}`;
   els.cloudStatus.style.color = ok ? "#0f766e" : "#66756f";
+}
+
+function getErrorMessage(error) {
+  return error?.code || error?.message || "未知错误";
 }
 
 function savePendingSales() {
@@ -972,10 +976,14 @@ async function loadCloudData() {
   try {
     updateCloudStatus("正在读取云端资料");
     const data = await window.cloudPOS.loadUserData(getActiveCashier());
-    const cloudSettings = await window.cloudPOS.loadSettings();
-    if (cloudSettings) {
-      appSettings = { ...appSettings, ...cloudSettings };
-      save(STORAGE_KEYS.settings, appSettings);
+    try {
+      const cloudSettings = await window.cloudPOS.loadSettings();
+      if (cloudSettings) {
+        appSettings = { ...appSettings, ...cloudSettings };
+        save(STORAGE_KEYS.settings, appSettings);
+      }
+    } catch (settingsError) {
+      console.warn("Cloud settings load skipped", settingsError);
     }
     if (data.branches.length) {
       branches = data.branches.filter((branch) => branch.active !== false);
@@ -1011,7 +1019,7 @@ async function loadCloudData() {
     renderAll();
     return true;
   } catch (error) {
-    updateCloudStatus("读取云端失败");
+    updateCloudStatus(`读取云端失败：${getErrorMessage(error)}`);
     console.warn("Cloud data load failed", error);
     return false;
   }
