@@ -374,13 +374,9 @@ body[data-view="order"] .totals {
   background: #fff;
 }
 
-body[data-view="order"] .customer-box {
-  grid-template-columns: 1fr 1fr;
-  padding: 10px;
-}
-
-body[data-view="order"] .customer-box strong {
-  grid-column: 1 / -1;
+.order-options-panel {
+  display: grid;
+  gap: 10px;
 }
 
 .quick-paid-buttons,
@@ -415,6 +411,46 @@ body[data-view="order"] #totalText {
 
 body[data-view="order"] #checkoutBtn {
   min-height: 56px;
+  font-size: 18px;
+}
+
+.payment-screen {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.payment-screen label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.payment-due {
+  text-align: center;
+  color: #4b5563;
+  font-size: clamp(46px, 8vw, 86px);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.payment-change {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  color: var(--muted);
+}
+
+.payment-change strong {
+  color: var(--brand-dark);
+  font-size: 30px;
+}
+
+#confirmPaymentBtn {
+  min-height: 58px;
   font-size: 18px;
 }
 
@@ -820,7 +856,7 @@ body[data-view="order"] #checkoutBtn {
 }
 
 dialog {
-  width: min(520px, calc(100% - 24px));
+  width: min(720px, calc(100% - 24px));
   border: 0;
   border-radius: 8px;
   padding: 0;
@@ -833,6 +869,10 @@ dialog::backdrop {
 
 .receipt {
   padding: 18px;
+}
+
+#receiptDialog {
+  width: min(560px, calc(100% - 24px));
 }
 
 pre {

@@ -66,47 +66,18 @@
       <div id="cartItems" class="cart-items"></div>
 
       <div class="totals">
-        <div class="customer-box">
-          <strong>客户资料</strong>
-          <input id="customerNameInput" placeholder="客户姓名">
-          <input id="customerPhoneInput" placeholder="电话 / WhatsApp">
+        <button id="orderOptionsToggle" class="ghost" type="button">订单设置：客户资料 / 折扣</button>
+        <div id="orderOptionsPanel" class="order-options-panel hidden">
+          <div class="customer-box">
+            <strong>客户资料</strong>
+            <input id="customerNameInput" placeholder="客户姓名">
+            <input id="customerPhoneInput" placeholder="电话 / WhatsApp">
+          </div>
+          <label>
+            折扣
+            <input id="discountInput" type="number" min="0" step="0.01" value="0">
+          </label>
         </div>
-        <label>
-          折扣
-          <input id="discountInput" type="number" min="0" step="0.01" value="0">
-        </label>
-        <label>
-          实收
-          <input id="paidInput" type="number" min="0" step="0.01" placeholder="客户付款金额">
-        </label>
-        <div id="quickPaidButtons" class="quick-paid-buttons" aria-label="快捷实收金额">
-          <button class="ghost" type="button" data-quick-paid="due">刚好</button>
-          <button class="ghost" type="button" data-quick-paid="15">15</button>
-          <button class="ghost" type="button" data-quick-paid="20">20</button>
-          <button class="ghost" type="button" data-quick-paid="50">50</button>
-          <button class="ghost" type="button" data-quick-paid="100">100</button>
-        </div>
-        <label>
-          付款方式
-          <select id="paymentMethodInput">
-            <option value="现金">现金</option>
-            <option value="银行转账">银行转账</option>
-            <option value="Touch n Go">Touch n Go</option>
-            <option value="DuitNow">DuitNow</option>
-            <option value="银行卡">银行卡</option>
-            <option value="简单支付 / SimplePay">简单支付 / SimplePay</option>
-          </select>
-        </label>
-        <div id="quickPaymentButtons" class="quick-payment-buttons" aria-label="快捷付款方式">
-          <button class="ghost" type="button" data-payment-method="现金">现金</button>
-          <button class="ghost" type="button" data-payment-method="简单支付 / SimplePay">SimplePay</button>
-          <button class="ghost" type="button" data-payment-method="DuitNow">DuitNow</button>
-          <button class="ghost" type="button" data-payment-method="Touch n Go">TNG</button>
-        </div>
-        <label>
-          参考号
-          <input id="paymentReferenceInput" placeholder="转账 / 收据参考号">
-        </label>
         <div class="total-line">
           <span>小计</span>
           <strong id="subtotalText">RM 0.00</strong>
@@ -119,7 +90,7 @@
           <span>找零</span>
           <strong id="changeText">RM 0.00</strong>
         </div>
-        <button id="checkoutBtn" class="primary" type="button">完成收款</button>
+        <button id="checkoutBtn" class="primary" type="button">进入收款</button>
       </div>
     </section>
 
@@ -355,6 +326,56 @@
       </form>
     </div>
   </nav>
+
+  <dialog id="paymentDialog">
+    <div class="payment-screen">
+      <div class="panel-header">
+        <div>
+          <h2>确认收款</h2>
+          <p>确认金额和付款方式后完成订单</p>
+        </div>
+        <button id="closePaymentBtn" class="ghost" type="button">返回订单</button>
+      </div>
+      <div class="payment-due" id="paymentDueText">RM 0.00</div>
+      <label>
+        实收金额
+        <input id="paidInput" type="number" min="0" step="0.01" placeholder="客户付款金额">
+      </label>
+      <div id="quickPaidButtons" class="quick-paid-buttons" aria-label="快捷实收金额">
+        <button class="ghost" type="button" data-quick-paid="due">刚好</button>
+        <button class="ghost" type="button" data-quick-paid="15">15</button>
+        <button class="ghost" type="button" data-quick-paid="20">20</button>
+        <button class="ghost" type="button" data-quick-paid="50">50</button>
+        <button class="ghost" type="button" data-quick-paid="100">100</button>
+      </div>
+      <label>
+        付款方式
+        <select id="paymentMethodInput">
+          <option value="现金">现金</option>
+          <option value="银行转账">银行转账</option>
+          <option value="Touch n Go">Touch n Go</option>
+          <option value="DuitNow">DuitNow</option>
+          <option value="银行卡">银行卡</option>
+          <option value="简单支付 / SimplePay">简单支付 / SimplePay</option>
+        </select>
+      </label>
+      <div id="quickPaymentButtons" class="quick-payment-buttons" aria-label="快捷付款方式">
+        <button class="ghost" type="button" data-payment-method="现金">现金</button>
+        <button class="ghost" type="button" data-payment-method="简单支付 / SimplePay">SimplePay</button>
+        <button class="ghost" type="button" data-payment-method="DuitNow">DuitNow</button>
+        <button class="ghost" type="button" data-payment-method="Touch n Go">TNG</button>
+      </div>
+      <label>
+        参考号
+        <input id="paymentReferenceInput" placeholder="转账 / 收据参考号">
+      </label>
+      <div class="payment-change">
+        <span>找零</span>
+        <strong id="paymentChangePreview">RM 0.00</strong>
+      </div>
+      <button id="confirmPaymentBtn" class="primary" type="button">确认收款</button>
+    </div>
+  </dialog>
 
   <dialog id="receiptDialog">
     <div class="receipt">

@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.51";
+const APP_VERSION = "v0.52";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -127,6 +127,8 @@ const els = {
   cartHint: document.querySelector("#cartHint"),
   cartItems: document.querySelector("#cartItems"),
   clearCartBtn: document.querySelector("#clearCartBtn"),
+  orderOptionsToggle: document.querySelector("#orderOptionsToggle"),
+  orderOptionsPanel: document.querySelector("#orderOptionsPanel"),
   operatorLoginForm: document.querySelector("#operatorLoginForm"),
   operatorEmailInput: document.querySelector("#operatorEmailInput"),
   operatorPasswordInput: document.querySelector("#operatorPasswordInput"),
@@ -145,6 +147,11 @@ const els = {
   totalText: document.querySelector("#totalText"),
   changeText: document.querySelector("#changeText"),
   checkoutBtn: document.querySelector("#checkoutBtn"),
+  paymentDialog: document.querySelector("#paymentDialog"),
+  paymentDueText: document.querySelector("#paymentDueText"),
+  paymentChangePreview: document.querySelector("#paymentChangePreview"),
+  confirmPaymentBtn: document.querySelector("#confirmPaymentBtn"),
+  closePaymentBtn: document.querySelector("#closePaymentBtn"),
   adminLoginForm: document.querySelector("#adminLoginForm"),
   adminEmailInput: document.querySelector("#adminEmailInput"),
   adminGoogleLoginBtn: document.querySelector("#adminGoogleLoginBtn"),
@@ -1965,6 +1972,7 @@ function renderCart() {
   els.subtotalText.textContent = money(totals.subtotal);
   els.totalText.textContent = money(totals.total);
   els.changeText.textContent = money(totals.change);
+  updatePaymentPreview();
   const exactPaidButton = els.quickPaidButtons?.querySelector('[data-quick-paid="due"]');
   if (exactPaidButton) exactPaidButton.textContent = totals.total > 0 ? totals.total.toFixed(2) : "刚好";
   for (const button of els.quickPaymentButtons.querySelectorAll("[data-payment-method]")) {
@@ -2001,6 +2009,23 @@ function getCartDueAmount() {
 
 function needsPaymentReference(method) {
   return method !== "现金";
+}
+
+function updatePaymentPreview() {
+  const totals = getCartTotals();
+  if (els.paymentDueText) els.paymentDueText.textContent = money(totals.total);
+  if (els.paymentChangePreview) els.paymentChangePreview.textContent = money(totals.change);
+}
+
+function openPaymentDialog() {
+  if (!cart.length) return;
+  if (!requireOperator()) return;
+  autoFillPaid = true;
+  renderCart();
+  updatePaymentPreview();
+  els.paymentDialog.showModal();
+  els.paidInput.focus();
+  els.paidInput.select();
 }
 
 async function checkout() {
@@ -2095,6 +2120,7 @@ async function checkout() {
     alert(`云端收款失败，订单已撤销：${syncResult.error?.message || "请刷新云端资料后再试。"}`);
     return;
   }
+  if (els.paymentDialog.open) els.paymentDialog.close();
   showReceipt(sale);
   renderAll();
 }
@@ -2813,6 +2839,9 @@ els.clearCartBtn.addEventListener("click", () => {
   els.paidInput.value = "";
   renderCart();
 });
+els.orderOptionsToggle.addEventListener("click", () => {
+  els.orderOptionsPanel.classList.toggle("hidden");
+});
 els.discountInput.addEventListener("input", renderCart);
 els.paidInput.addEventListener("input", () => {
   autoFillPaid = false;
@@ -2861,7 +2890,7 @@ els.quickCheckoutBtn.addEventListener("click", () => {
     els.cashierToggleBtn.setAttribute("aria-expanded", "true");
     els.operatorEmailInput.focus();
   } else if (cart.length) {
-    checkout();
+    openPaymentDialog();
   } else {
     els.searchInput.focus();
   }
@@ -2871,7 +2900,9 @@ els.reportEndInput.addEventListener("change", renderGlobalDashboard);
 els.reportTodayBtn.addEventListener("click", () => setReportRange(inputDate(), inputDate()));
 els.reportMonthBtn.addEventListener("click", () => setReportRange(monthStartDate(), monthEndDate()));
 els.reportAllBtn.addEventListener("click", () => setReportRange("", ""));
-els.checkoutBtn.addEventListener("click", checkout);
+els.checkoutBtn.addEventListener("click", openPaymentDialog);
+els.confirmPaymentBtn.addEventListener("click", checkout);
+els.closePaymentBtn.addEventListener("click", () => els.paymentDialog.close());
 els.adminLoginForm.addEventListener("submit", loginAdmin);
 els.adminGoogleLoginBtn.addEventListener("click", signInWithGoogle);
 els.adminLogoutBtn.addEventListener("click", logoutAdmin);
