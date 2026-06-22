@@ -503,8 +503,8 @@ select {
 }
 
 .cashier-menu {
-  right: 18px;
-  width: min(320px, calc(100% - 36px));
+  right: max(12px, env(safe-area-inset-right));
+  width: min(360px, calc(100vw - 24px));
 }
 
 .menu-toggle,
@@ -557,6 +557,27 @@ select {
   padding: 12px;
   background: #fff;
   box-shadow: var(--shadow);
+  max-height: calc(100dvh - 96px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.cashier-panel .operator-login {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cashier-panel .operator-login strong,
+.cashier-panel .operator-login input,
+.cashier-panel .operator-login .form-message {
+  grid-column: 1 / -1;
+  min-width: 0;
+  width: 100%;
+}
+
+.cashier-panel .operator-login button {
+  min-width: 0;
+  white-space: normal;
 }
 
 .cashier-status {
@@ -622,6 +643,12 @@ pre {
 
   .cart-panel {
     grid-row: auto;
+  }
+}
+
+@media (max-width: 420px) {
+  .cashier-panel .operator-login {
+    grid-template-columns: 1fr;
   }
 }
 
