@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.49";
+const APP_VERSION = "v0.51";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -120,6 +120,7 @@ const els = {
   seedBtn: document.querySelector("#seedBtn"),
   searchInput: document.querySelector("#searchInput"),
   categoryFilter: document.querySelector("#categoryFilter"),
+  categoryRail: document.querySelector("#categoryRail"),
   branchSelect: document.querySelector("#branchSelect"),
   refreshCloudBtn: document.querySelector("#refreshCloudBtn"),
   productGrid: document.querySelector("#productGrid"),
@@ -136,7 +137,9 @@ const els = {
   customerPhoneInput: document.querySelector("#customerPhoneInput"),
   discountInput: document.querySelector("#discountInput"),
   paidInput: document.querySelector("#paidInput"),
+  quickPaidButtons: document.querySelector("#quickPaidButtons"),
   paymentMethodInput: document.querySelector("#paymentMethodInput"),
+  quickPaymentButtons: document.querySelector("#quickPaymentButtons"),
   paymentReferenceInput: document.querySelector("#paymentReferenceInput"),
   subtotalText: document.querySelector("#subtotalText"),
   totalText: document.querySelector("#totalText"),
@@ -1841,11 +1844,33 @@ function renderCategoryFilter() {
   const selected = els.categoryFilter.value || "all";
   const categories = [...new Set(products.map((product) => product.category))].sort();
   els.categoryFilter.innerHTML = '<option value="all">全部分类</option>';
+  els.categoryRail.innerHTML = "";
+  const allButton = document.createElement("button");
+  allButton.type = "button";
+  allButton.className = selected === "all" ? "active" : "";
+  allButton.textContent = "全部分类";
+  allButton.addEventListener("click", () => {
+    els.categoryFilter.value = "all";
+    renderProducts();
+    renderCategoryFilter();
+  });
+  els.categoryRail.append(allButton);
   for (const category of categories) {
     const option = document.createElement("option");
     option.value = category;
     option.textContent = category;
     els.categoryFilter.append(option);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = selected === category ? "active" : "";
+    button.textContent = category;
+    button.addEventListener("click", () => {
+      els.categoryFilter.value = category;
+      renderProducts();
+      renderCategoryFilter();
+    });
+    els.categoryRail.append(button);
   }
   els.categoryFilter.value = categories.includes(selected) ? selected : "all";
 }
@@ -1940,6 +1965,11 @@ function renderCart() {
   els.subtotalText.textContent = money(totals.subtotal);
   els.totalText.textContent = money(totals.total);
   els.changeText.textContent = money(totals.change);
+  const exactPaidButton = els.quickPaidButtons?.querySelector('[data-quick-paid="due"]');
+  if (exactPaidButton) exactPaidButton.textContent = totals.total > 0 ? totals.total.toFixed(2) : "刚好";
+  for (const button of els.quickPaymentButtons.querySelectorAll("[data-payment-method]")) {
+    button.classList.toggle("active", button.dataset.paymentMethod === els.paymentMethodInput.value);
+  }
   els.checkoutBtn.disabled = !cart.length;
 }
 
@@ -2725,7 +2755,10 @@ function resetAllData() {
 }
 
 els.searchInput.addEventListener("input", renderProducts);
-els.categoryFilter.addEventListener("change", renderProducts);
+els.categoryFilter.addEventListener("change", () => {
+  renderProducts();
+  renderCategoryFilter();
+});
 els.refreshCloudBtn.addEventListener("click", loadCloudData);
 els.menuToggleBtn.addEventListener("click", () => {
   const open = !els.appMenu.classList.contains("open");
@@ -2785,9 +2818,26 @@ els.paidInput.addEventListener("input", () => {
   autoFillPaid = false;
   renderCart();
 });
+els.quickPaidButtons.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-quick-paid]");
+  if (!button) return;
+  const value = button.dataset.quickPaid === "due" ? getCartDueAmount() : Number(button.dataset.quickPaid);
+  els.paidInput.value = Number(value || 0).toFixed(2);
+  autoFillPaid = false;
+  renderCart();
+});
 els.paymentMethodInput.addEventListener("change", () => {
   preferredPaymentMethod = els.paymentMethodInput.value;
   localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
+  renderCart();
+});
+els.quickPaymentButtons.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-payment-method]");
+  if (!button) return;
+  preferredPaymentMethod = button.dataset.paymentMethod;
+  els.paymentMethodInput.value = preferredPaymentMethod;
+  localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
+  renderCart();
 });
 els.salesDateInput.addEventListener("change", renderSales);
 els.salesSearchInput.addEventListener("input", renderSales);

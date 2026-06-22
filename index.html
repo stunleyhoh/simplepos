@@ -27,7 +27,7 @@
 
   <main class="app-shell">
     <section class="panel catalog-panel" data-view-panel="order" aria-labelledby="catalogTitle">
-      <div class="panel-header">
+      <div class="panel-header pos-catalog-header">
         <div>
           <h2 id="catalogTitle">商品</h2>
           <p>点击商品加入购物车</p>
@@ -35,7 +35,7 @@
         <button id="seedBtn" class="ghost" type="button">恢复示例商品</button>
       </div>
 
-      <div class="toolbar">
+      <div class="toolbar pos-toolbar">
         <input id="searchInput" type="search" placeholder="搜索商品名称或条码">
         <select id="categoryFilter" aria-label="按分类筛选">
           <option value="all">全部分类</option>
@@ -48,11 +48,14 @@
         <button id="refreshCloudBtn" class="ghost" type="button">刷新云端资料</button>
       </div>
 
-      <div id="productGrid" class="product-grid" aria-live="polite"></div>
+      <div class="pos-sales-area">
+        <div id="categoryRail" class="category-rail" aria-label="商品分类"></div>
+        <div id="productGrid" class="product-grid" aria-live="polite"></div>
+      </div>
     </section>
 
     <section class="panel cart-panel" data-view-panel="order" aria-labelledby="cartTitle">
-      <div class="panel-header">
+      <div class="panel-header pos-order-header">
         <div>
           <h2 id="cartTitle">当前订单</h2>
           <p id="cartHint">还没有商品</p>
@@ -76,6 +79,13 @@
           实收
           <input id="paidInput" type="number" min="0" step="0.01" placeholder="客户付款金额">
         </label>
+        <div id="quickPaidButtons" class="quick-paid-buttons" aria-label="快捷实收金额">
+          <button class="ghost" type="button" data-quick-paid="due">刚好</button>
+          <button class="ghost" type="button" data-quick-paid="15">15</button>
+          <button class="ghost" type="button" data-quick-paid="20">20</button>
+          <button class="ghost" type="button" data-quick-paid="50">50</button>
+          <button class="ghost" type="button" data-quick-paid="100">100</button>
+        </div>
         <label>
           付款方式
           <select id="paymentMethodInput">
@@ -87,6 +97,12 @@
             <option value="简单支付 / SimplePay">简单支付 / SimplePay</option>
           </select>
         </label>
+        <div id="quickPaymentButtons" class="quick-payment-buttons" aria-label="快捷付款方式">
+          <button class="ghost" type="button" data-payment-method="现金">现金</button>
+          <button class="ghost" type="button" data-payment-method="简单支付 / SimplePay">SimplePay</button>
+          <button class="ghost" type="button" data-payment-method="DuitNow">DuitNow</button>
+          <button class="ghost" type="button" data-payment-method="Touch n Go">TNG</button>
+        </div>
         <label>
           参考号
           <input id="paymentReferenceInput" placeholder="转账 / 收据参考号">
