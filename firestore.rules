@@ -53,7 +53,8 @@ service cloud.firestore {
     match /sales/{saleId} {
       allow read: if isAdmin() || sameBranch(resource.data.branchId);
       allow create: if isAdmin() || sameBranch(request.resource.data.branchId);
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin() || sameBranch(resource.data.branchId);
+      allow delete: if isAdmin();
     }
 
     match /settings/{settingId} {
@@ -62,14 +63,14 @@ service cloud.firestore {
     }
 
     match /stockAdjustments/{adjustmentId} {
-      allow read: if isAdmin();
-      allow create: if isAdmin();
+      allow read: if isAdmin() || sameBranch(resource.data.branchId);
+      allow create: if isAdmin() || sameBranch(request.resource.data.branchId);
       allow update, delete: if isAdmin();
     }
 
     match /auditLogs/{logId} {
       allow read: if isAdmin();
-      allow create: if isAdmin();
+      allow create: if isAdmin() || isActiveCashier();
       allow update, delete: if isAdmin();
     }
   }

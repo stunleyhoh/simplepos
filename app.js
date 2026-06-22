@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.53";
+const APP_VERSION = "v0.54";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -87,8 +87,12 @@ function setAppView(view) {
   els.appMenu.classList.remove("open");
   els.menuToggleBtn.setAttribute("aria-expanded", "false");
   updateViewHeadings();
-  if (view !== "order" && !isAdmin()) {
-    els.adminLoginMessage.textContent = `请先进入后台，才能查看「${VIEW_META[view]?.title || "这个功能"}」。`;
+  renderAdminAccess();
+  renderInventoryBranchFilter();
+  renderInventoryOverview();
+  renderSales();
+  if (!canAccessView(view)) {
+    els.adminLoginMessage.textContent = `请先登录有权限的账号，才能查看「${VIEW_META[view]?.title || "这个功能"}」。`;
     els.adminLoginMessage.classList.remove("error");
   }
 }
@@ -396,6 +400,31 @@ function isAdmin() {
   return Boolean(adminEmail);
 }
 
+function canUseOperations() {
+  return isAdmin() || Boolean(getOperator());
+}
+
+function canAccessView(view = currentView) {
+  if (view === "order") return true;
+  if (view === "inventory" || view === "transactions") return canUseOperations();
+  return isAdmin();
+}
+
+function getOperationalBranchId() {
+  return isAdmin() ? currentBranchId : getOperator()?.branchId || currentBranchId;
+}
+
+function canManageBranch(branchId) {
+  if (isAdmin()) return true;
+  const operator = getOperator();
+  return Boolean(operator && operator.branchId === branchId);
+}
+
+function canVoidSale(sale) {
+  if (!sale || isSaleVoided(sale)) return false;
+  return canManageBranch(sale.branchId || "hq");
+}
+
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -573,17 +602,22 @@ function renderBranchSelect() {
 }
 
 function renderAdminAccess() {
-  const allowed = isAdmin();
-  els.adminStatus.textContent = allowed ? "后台管理员" : "后台未登录";
-  els.adminStatus.style.color = allowed ? "#0f766e" : "#66756f";
-  els.adminLoginForm.classList.toggle("hidden", allowed);
-  els.adminLogoutBtn.classList.toggle("hidden", !allowed);
-  els.adminContent.classList.toggle("hidden", !allowed);
-  if (allowed) {
+  const adminAllowed = isAdmin();
+  const viewAllowed = canAccessView();
+  const operationalAllowed = !adminAllowed && canUseOperations() && (currentView === "inventory" || currentView === "transactions");
+  els.adminStatus.textContent = adminAllowed ? "后台管理员" : operationalAllowed ? "员工营运权限" : "后台未登录";
+  els.adminStatus.style.color = adminAllowed || operationalAllowed ? "#0f766e" : "#66756f";
+  els.adminLoginForm.classList.toggle("hidden", adminAllowed || operationalAllowed);
+  els.adminLogoutBtn.classList.toggle("hidden", !adminAllowed);
+  els.adminContent.classList.toggle("hidden", !viewAllowed);
+  if (adminAllowed) {
     els.adminLoginMessage.classList.remove("error");
     els.adminLoginMessage.textContent = isCloudAdmin()
       ? "Google 管理员已授权"
       : "本机管理员已授权";
+  } else if (operationalAllowed) {
+    els.adminLoginMessage.classList.remove("error");
+    els.adminLoginMessage.textContent = "员工可处理本分行库存和退款/作废。";
   }
 }
 
@@ -1132,6 +1166,13 @@ function requireAdmin() {
   return false;
 }
 
+function requireOperations() {
+  if (canUseOperations()) return true;
+  alert("请先使用授权员工账号登录。");
+  els.operatorEmailInput.focus();
+  return false;
+}
+
 function isCloudAdmin() {
   return currentCloudUser && currentCloudUser.role === "admin";
 }
@@ -1288,6 +1329,30 @@ function renderManagementLists() {
       `;
       els.stockAdjustmentList.append(row);
     }
+  }
+}
+
+function renderStockAdjustmentList() {
+  if (!canUseOperations()) return;
+  els.stockAdjustmentList.innerHTML = "";
+  const stockRows = stockAdjustments
+    .filter((adjustment) => canManageBranch(adjustment.branchId || "hq"))
+    .slice(0, 10);
+  if (!stockRows.length) {
+    els.stockAdjustmentList.innerHTML = '<div class="empty">暂无库存流水</div>';
+    return;
+  }
+  for (const adjustment of stockRows) {
+    const row = document.createElement("div");
+    row.className = "management-row";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(adjustment.productName || "-")}</strong>
+        <small>${new Date(adjustment.createdAt).toLocaleString()} · ${escapeHtml(adjustment.branchName || getBranchName(adjustment.branchId || "hq"))}</small>
+      </div>
+      <small>${Number(adjustment.beforeStock || 0)} → ${Number(adjustment.afterStock || 0)} (${Number(adjustment.delta || 0) >= 0 ? "+" : ""}${Number(adjustment.delta || 0)})</small>
+    `;
+    els.stockAdjustmentList.append(row);
   }
 }
 
@@ -1491,6 +1556,7 @@ function renderAll() {
   renderInventoryOverview();
   renderGlobalDashboard();
   renderManagementLists();
+  renderStockAdjustmentList();
   renderAdminAccess();
   renderOperatorAccess();
   updateNetworkStatus();
@@ -1498,7 +1564,9 @@ function renderAll() {
 
 function renderInventoryBranchFilter() {
   if (!els.inventoryBranchFilter) return;
-  const selectedBranchId = resolveBranchId(els.inventoryBranchFilter.value) || currentBranchId || "hq";
+  const selectedBranchId = isAdmin()
+    ? (resolveBranchId(els.inventoryBranchFilter.value) || currentBranchId || "hq")
+    : (getOperator()?.branchId || currentBranchId || "hq");
   els.inventoryBranchFilter.innerHTML = "";
   for (const branch of branches) {
     const option = document.createElement("option");
@@ -1509,6 +1577,8 @@ function renderInventoryBranchFilter() {
   els.inventoryBranchFilter.value = branches.some((branch) => branch.id === selectedBranchId)
     ? selectedBranchId
     : (branches[0]?.id || "hq");
+  els.inventoryBranchFilter.disabled = !isAdmin();
+  els.inventoryBranchFilter.title = isAdmin() ? "管理员可查看所有分行库存" : "员工只能处理授权分行库存";
 }
 
 function renderMenuProductList() {
@@ -1548,9 +1618,11 @@ function fillProductForm(product) {
 }
 
 function renderInventoryOverview() {
-  if (!isAdmin()) return;
+  if (!canUseOperations()) return;
   els.inventoryOverviewList.innerHTML = "";
-  const selectedBranchId = resolveBranchId(els.inventoryBranchFilter.value) || currentBranchId || "hq";
+  const selectedBranchId = isAdmin()
+    ? (resolveBranchId(els.inventoryBranchFilter.value) || currentBranchId || "hq")
+    : (getOperator()?.branchId || currentBranchId || "hq");
   const selectedBranchName = getBranchName(selectedBranchId);
   const keyword = els.inventorySearchInput.value.trim().toLowerCase();
   const filteredProducts = products.filter((product) => {
@@ -1585,11 +1657,15 @@ function renderInventoryOverview() {
 }
 
 function adjustInventoryStock(productId, branchId) {
-  if (!requireAdmin()) return;
+  if (!requireOperations()) return;
   const product = products.find((item) => item.id === productId);
   const resolvedBranchId = resolveBranchId(branchId);
   if (!product || !resolvedBranchId) {
     alert("找不到商品或分行。");
+    return;
+  }
+  if (!canManageBranch(resolvedBranchId)) {
+    alert("员工只能调整自己授权分行的库存。");
     return;
   }
   const beforeStock = getBranchStock(product, resolvedBranchId);
@@ -1708,9 +1784,13 @@ function getActiveSales(source = sales) {
 }
 
 function voidSale(saleId) {
-  if (!requireAdmin()) return;
+  if (!requireOperations()) return;
   const sale = sales.find((item) => item.id === saleId);
   if (!sale || isSaleVoided(sale)) return;
+  if (!canVoidSale(sale)) {
+    alert("员工只能处理自己授权分行的退款/作废。");
+    return;
+  }
   if (!confirm(`确定作废订单 ${sale.id} 并回补库存吗？`)) return;
   if (prompt("请输入 VOID 确认作废订单。") !== "VOID") {
     alert("已取消作废。");
@@ -1776,7 +1856,10 @@ function voidSale(saleId) {
 }
 
 function renderFollowUps() {
-  if (!isAdmin()) return;
+  if (!isAdmin()) {
+    els.followUpList.innerHTML = '<div class="empty compact-empty">客户跟进仅管理员可用</div>';
+    return;
+  }
   els.followUpList.innerHTML = "";
   const activePlans = getActiveSales()
     .filter((sale) => sale.service?.endDate)
@@ -1816,12 +1899,13 @@ function renderFollowUps() {
 }
 
 function renderLowStock() {
-  if (!isAdmin()) return;
+  if (!canUseOperations()) return;
   els.lowStockList.innerHTML = "";
   const lowStockItems = [];
   const threshold = Number(appSettings.lowStockThreshold ?? 5);
   for (const product of products) {
     for (const branch of branches) {
+      if (!canManageBranch(branch.id)) continue;
       const stock = getBranchStock(product, branch.id);
       if (stock <= threshold) {
         lowStockItems.push({ product, branch, stock });
@@ -2164,6 +2248,7 @@ function renderSales() {
   const keyword = els.salesSearchInput.value.trim().toLowerCase();
   const paymentFilter = els.salesPaymentFilter.value;
   const selectedSales = sales.filter((sale) => {
+    if (!canManageBranch(sale.branchId || "hq")) return false;
     const matchDate = inputDate(new Date(sale.createdAt)) === selectedDate;
     if (!matchDate) return false;
     if (paymentFilter !== "all" && (sale.payment?.method || "现金") !== paymentFilter) return false;
@@ -2212,7 +2297,7 @@ function renderSales() {
       <span class="product-meta">付款：${escapeHtml(sale.payment?.method || "现金")}${sale.payment?.reference ? ` · ${escapeHtml(sale.payment.reference)}` : ""}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
-      ${isAdmin() && !isSaleVoided(sale) ? '<button class="ghost danger" type="button" data-void-sale>作废并回补库存</button>' : ""}
+      ${canVoidSale(sale) ? '<button class="ghost danger" type="button" data-void-sale>退款 / 作废并回补库存</button>' : ""}
     `;
     const voidButton = row.querySelector("[data-void-sale]");
     if (voidButton) voidButton.addEventListener("click", () => voidSale(sale.id));
