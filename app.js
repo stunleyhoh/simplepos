@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.54";
+const APP_VERSION = "v0.55";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -281,6 +281,8 @@ function queuePendingSale(sale) {
 function markSaleSynced(saleId) {
   pendingSales = pendingSales.filter((sale) => sale.id !== saleId);
   savePendingSales();
+  sales = sales.map((sale) => sale.id === saleId ? { ...sale, syncStatus: "synced" } : sale);
+  save(STORAGE_KEYS.sales, sales);
 }
 
 function savePendingSaleUpdates() {
@@ -1779,6 +1781,14 @@ function getSaleStatusText(sale) {
   return isSaleVoided(sale) ? "已作废" : "正常";
 }
 
+function getSaleSyncText(sale) {
+  if (pendingSales.some((item) => item.id === sale.id)) return "待同步";
+  if (pendingSaleUpdates.some((item) => item.id === sale.id)) return "更新待同步";
+  if (sale.syncStatus === "synced") return "已同步";
+  if (sale.syncStatus === "queued" || sale.syncStatus === "pending") return "后台同步中";
+  return "已处理";
+}
+
 function getActiveSales(source = sales) {
   return source.filter((sale) => !isSaleVoided(sale));
 }
@@ -2161,13 +2171,9 @@ async function checkout() {
       method: paymentMethod,
       reference: paymentReference
     },
-    syncStatus: navigator.onLine && hasCloud() ? "syncing" : "pending"
+    syncStatus: navigator.onLine && hasCloud() ? "queued" : "pending"
   };
 
-  const previousProducts = structuredClone(products);
-  const previousSales = structuredClone(sales);
-  const previousCart = structuredClone(cart);
-  const onlineTransaction = hasCloud() && navigator.onLine && window.cloudPOS.saveCheckout;
   const changedProducts = [];
   products = products.map((product) => {
     const sold = cart.find((item) => item.id === product.id);
@@ -2191,22 +2197,10 @@ async function checkout() {
       syncProductToCloud(product);
     }
   }
-  const syncResult = await syncSaleToCloud(sale);
-  if (onlineTransaction && !syncResult.ok) {
-    products = previousProducts;
-    sales = previousSales;
-    pendingSales = pendingSales.filter((item) => item.id !== sale.id);
-    save(STORAGE_KEYS.products, products);
-    save(STORAGE_KEYS.sales, sales);
-    savePendingSales();
-    cart = previousCart;
-    renderAll();
-    alert(`云端收款失败，订单已撤销：${syncResult.error?.message || "请刷新云端资料后再试。"}`);
-    return;
-  }
   if (els.paymentDialog.open) els.paymentDialog.close();
   showReceipt(sale);
   renderAll();
+  syncSaleToCloud(sale).then(() => renderSales());
 }
 
 function showReceipt(sale) {
@@ -2293,7 +2287,7 @@ function renderSales() {
       <span class="product-meta">分行：${escapeHtml(sale.branchName || getBranchName(sale.branchId || "hq"))}</span>
       <span class="product-meta">收银员：${escapeHtml(sale.operator?.name || "-")}</span>
       <span class="product-meta">班次：${escapeHtml(sale.shiftId || "-")}</span>
-      <span class="product-meta">同步：${pendingSales.some((item) => item.id === sale.id) ? "待同步" : "已处理"}</span>
+      <span class="product-meta">同步：${getSaleSyncText(sale)}</span>
       <span class="product-meta">付款：${escapeHtml(sale.payment?.method || "现金")}${sale.payment?.reference ? ` · ${escapeHtml(sale.payment.reference)}` : ""}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
@@ -2486,7 +2480,7 @@ function exportSales() {
       sale.branchName || getBranchName(sale.branchId || "hq"),
       sale.operator?.name || "",
       sale.operator?.email || "",
-      pendingSales.some((item) => item.id === sale.id) ? "待同步" : "已处理",
+      getSaleSyncText(sale),
       new Date(sale.createdAt).toLocaleString(),
       sale.customer?.name || "",
       sale.customer?.phone || "",
