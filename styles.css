@@ -893,6 +893,34 @@ dialog::backdrop {
   padding: 18px;
 }
 
+.integration-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.integration-form > label,
+.integration-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.integration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.integration-id-row {
+  display: flex;
+  gap: 10px;
+}
+
+.integration-id-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .printer-settings {
   display: grid;
   gap: 12px;
@@ -1007,6 +1035,15 @@ pre {
 
   body[data-view="order"] .customer-box {
     grid-template-columns: 1fr;
+  }
+
+  .integration-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .integration-id-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .quick-paid-buttons {

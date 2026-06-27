@@ -16,9 +16,12 @@ service cloud.firestore {
     }
 
     function isActiveCashier() {
-      return signedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.token.email))
-        && userDoc().data.active == true;
+      return isAdmin()
+        || (
+          signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.token.email))
+          && userDoc().data.active == true
+        );
     }
 
     function sameBranch(branchId) {
@@ -46,14 +49,35 @@ service cloud.firestore {
           && request.resource.data.category == resource.data.category
           && request.resource.data.price == resource.data.price
           && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(["branchStock", "stock", "updatedAt", "active"])
+            .hasOnly(["branchStock", "stock", "updatedAt"])
+          && request.resource.data.branchStock.diff(resource.data.branchStock).affectedKeys()
+            .hasOnly([userDoc().data.branchId])
+          && (
+            userDoc().data.branchId == "hq"
+            || request.resource.data.stock == resource.data.stock
+          )
         );
     }
 
     match /sales/{saleId} {
       allow read: if isAdmin() || sameBranch(resource.data.branchId);
       allow create: if isAdmin() || sameBranch(request.resource.data.branchId);
-      allow update: if isAdmin() || sameBranch(resource.data.branchId);
+      allow update: if isAdmin()
+        || (
+          sameBranch(resource.data.branchId)
+          && request.resource.data.branchId == resource.data.branchId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "status",
+            "voidedAt",
+            "voidedBy",
+            "syncStatus",
+            "externalReferences",
+            "customer",
+            "payment",
+            "updatedAt",
+            "syncedAt"
+          ])
+        );
       allow delete: if isAdmin();
     }
 

@@ -21,7 +21,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.58";
+const APP_VERSION = "v0.62";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -49,11 +49,11 @@ const sampleProducts = [
 ];
 
 let products = load(STORAGE_KEYS.products, sampleProducts);
-let sales = load(STORAGE_KEYS.sales, []);
+let sales = load(STORAGE_KEYS.sales, []).map(normalizeSaleExternalReferences);
 let branches = load(STORAGE_KEYS.branches, defaultBranches);
 let authorizedUsers = load(STORAGE_KEYS.authorizedUsers, defaultAuthorizedUsers);
-let pendingSales = load(STORAGE_KEYS.pendingSales, []);
-let pendingSaleUpdates = load(STORAGE_KEYS.pendingSaleUpdates, []);
+let pendingSales = load(STORAGE_KEYS.pendingSales, []).map(normalizeSaleExternalReferences);
+let pendingSaleUpdates = load(STORAGE_KEYS.pendingSaleUpdates, []).map(normalizeSaleExternalReferences);
 let pendingProducts = load(STORAGE_KEYS.pendingProducts, []);
 let pendingStockAdjustments = load(STORAGE_KEYS.pendingStockAdjustments, []);
 let pendingAuditLogs = load(STORAGE_KEYS.pendingAuditLogs, []);
@@ -81,6 +81,7 @@ let paymentMethodInitialized = false;
 let showMoreSales = false;
 let lastReceiptSale = null;
 let editingProductId = "";
+let editingIntegrationSaleId = "";
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -218,6 +219,7 @@ const els = {
   inventorySearchInput: document.querySelector("#inventorySearchInput"),
   inventoryOverviewList: document.querySelector("#inventoryOverviewList"),
   syncOverview: document.querySelector("#syncOverview"),
+  integrationOverview: document.querySelector("#integrationOverview"),
   shiftList: document.querySelector("#shiftList"),
   auditList: document.querySelector("#auditList"),
   stockAdjustmentList: document.querySelector("#stockAdjustmentList"),
@@ -242,8 +244,10 @@ const els = {
   salesDateInput: document.querySelector("#salesDateInput"),
   salesSearchInput: document.querySelector("#salesSearchInput"),
   salesPaymentFilter: document.querySelector("#salesPaymentFilter"),
+  salesIntegrationFilter: document.querySelector("#salesIntegrationFilter"),
   dailyPaymentSummaryList: document.querySelector("#dailyPaymentSummaryList"),
   exportDailySettlementBtn: document.querySelector("#exportDailySettlementBtn"),
+  exportIntegrationQueueBtn: document.querySelector("#exportIntegrationQueueBtn"),
   toggleSalesLimitBtn: document.querySelector("#toggleSalesLimitBtn"),
   todaySalesBtn: document.querySelector("#todaySalesBtn"),
   salesList: document.querySelector("#salesList"),
@@ -260,7 +264,18 @@ const els = {
   printerPairBtn: document.querySelector("#printerPairBtn"),
   printerTestBtn: document.querySelector("#printerTestBtn"),
   printerForgetBtn: document.querySelector("#printerForgetBtn"),
-  printerStatus: document.querySelector("#printerStatus")
+  printerStatus: document.querySelector("#printerStatus"),
+  integrationDialog: document.querySelector("#integrationDialog"),
+  integrationForm: document.querySelector("#integrationForm"),
+  integrationOrderNo: document.querySelector("#integrationOrderNo"),
+  integrationPosOrderId: document.querySelector("#integrationPosOrderId"),
+  integrationSimplePayReference: document.querySelector("#integrationSimplePayReference"),
+  integrationSimplePayStatus: document.querySelector("#integrationSimplePayStatus"),
+  integrationAffiliateReferralCode: document.querySelector("#integrationAffiliateReferralCode"),
+  integrationAffiliateOrderId: document.querySelector("#integrationAffiliateOrderId"),
+  integrationAffiliateStatus: document.querySelector("#integrationAffiliateStatus"),
+  closeIntegrationBtn: document.querySelector("#closeIntegrationBtn"),
+  copyIntegrationOrderIdBtn: document.querySelector("#copyIntegrationOrderIdBtn")
 };
 
 function load(key, fallback) {
@@ -274,6 +289,38 @@ function load(key, fallback) {
 
 function save(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+function normalizeSaleExternalReferences(sale = {}) {
+  const payment = sale.payment || {};
+  const existing = sale.externalReferences || {};
+  const referralCode = String(
+    sale.customer?.referralCode || existing.affiliateReferralCode || ""
+  ).trim().toUpperCase();
+  const simplePayReference = String(
+    existing.simplePayReference
+      || (payment.method === "简单支付 / SimplePay" ? payment.reference : "")
+      || ""
+  ).trim();
+  const affiliateOrderId = String(existing.affiliateOrderId || "").trim();
+  return {
+    ...sale,
+    customer: {
+      ...(sale.customer || {}),
+      referralCode
+    },
+    externalReferences: {
+      ...existing,
+      posOrderId: existing.posOrderId || sale.id || "",
+      simplePayReference,
+      simplePayStatus: existing.simplePayStatus
+        || (payment.method === "简单支付 / SimplePay" ? (simplePayReference ? "linked" : "pending") : "not-used"),
+      affiliateReferralCode: referralCode,
+      affiliateOrderId,
+      affiliateStatus: existing.affiliateStatus
+        || (affiliateOrderId ? "linked" : (referralCode ? "pending" : "not-used"))
+    }
+  };
 }
 
 function hasCloud() {
@@ -296,10 +343,11 @@ function savePendingSales() {
 }
 
 function queuePendingSale(sale) {
-  if (!pendingSales.some((item) => item.id === sale.id)) {
-    pendingSales.unshift({ ...sale, syncStatus: "pending" });
-    savePendingSales();
-  }
+  pendingSales = [
+    { ...sale, syncStatus: "pending" },
+    ...pendingSales.filter((item) => item.id !== sale.id)
+  ];
+  savePendingSales();
   updateCloudStatus("订单待同步");
 }
 
@@ -326,6 +374,8 @@ function queuePendingSaleUpdate(sale) {
 function markSaleUpdateSynced(saleId) {
   pendingSaleUpdates = pendingSaleUpdates.filter((sale) => sale.id !== saleId);
   savePendingSaleUpdates();
+  sales = sales.map((sale) => sale.id === saleId ? { ...sale, syncStatus: "synced" } : sale);
+  save(STORAGE_KEYS.sales, sales);
 }
 
 function savePendingProducts() {
@@ -592,6 +642,15 @@ function cloneSampleProductsForBranches() {
   }));
 }
 
+function migrateSaleExternalReferences() {
+  sales = sales.map(normalizeSaleExternalReferences);
+  pendingSales = pendingSales.map(normalizeSaleExternalReferences);
+  pendingSaleUpdates = pendingSaleUpdates.map(normalizeSaleExternalReferences);
+  save(STORAGE_KEYS.sales, sales);
+  savePendingSales();
+  savePendingSaleUpdates();
+}
+
 function migrateManagementData() {
   appSettings = { ...defaultSettings, ...appSettings };
   if (!branches.length) branches = structuredClone(defaultBranches);
@@ -604,6 +663,7 @@ function migrateManagementData() {
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   save(STORAGE_KEYS.settings, appSettings);
+  migrateSaleExternalReferences();
 }
 
 function renderBranchSelect() {
@@ -867,8 +927,8 @@ async function signInWithGoogle() {
 }
 
 async function syncSaleToCloud(sale) {
+  queuePendingSale(sale);
   if (!hasCloud() || !navigator.onLine) {
-    queuePendingSale(sale);
     return { ok: false, queued: true };
   }
   try {
@@ -883,7 +943,6 @@ async function syncSaleToCloud(sale) {
     updateCloudStatus("云端已同步", true);
     return { ok: true, queued: false };
   } catch (error) {
-    queuePendingSale(sale);
     updateCloudStatus("云端同步失败");
     console.warn("Cloud sync failed", error);
     return { ok: false, queued: true, error };
@@ -1059,7 +1118,7 @@ async function initializeCloudData() {
 
 function normalizeCloudSales(cloudSales) {
   return cloudSales
-    .map((sale) => ({
+    .map((sale) => normalizeSaleExternalReferences({
       ...sale,
       createdAt: sale.createdAt?.toDate ? sale.createdAt.toDate().toISOString() : sale.createdAt
     }))
@@ -1104,7 +1163,14 @@ async function loadCloudData() {
     }
     if (data.sales.length) {
       const cloudSales = normalizeCloudSales(data.sales);
-      const mergedSales = [...cloudSales, ...sales.filter((sale) => !cloudSales.some((item) => item.id === sale.id))];
+      const pendingById = new Map(
+        [...pendingSales, ...pendingSaleUpdates].map((sale) => [sale.id, normalizeSaleExternalReferences(sale)])
+      );
+      const cloudWithLocalPending = cloudSales.map((sale) => pendingById.get(sale.id) || sale);
+      const mergedSales = [
+        ...cloudWithLocalPending,
+        ...sales.filter((sale) => !cloudSales.some((item) => item.id === sale.id))
+      ];
       sales = mergedSales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       save(STORAGE_KEYS.sales, sales);
     }
@@ -1463,6 +1529,17 @@ function createId() {
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function createPosOrderId(branchId = currentBranchId) {
+  const branchToken = String(branchId || "hq")
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(0, 8)
+    .toUpperCase() || "HQ";
+  const randomToken = window.crypto?.getRandomValues
+    ? Array.from(window.crypto.getRandomValues(new Uint8Array(3)), (value) => value.toString(16).padStart(2, "0")).join("").toUpperCase()
+    : Math.random().toString(16).slice(2, 8).toUpperCase();
+  return `POS-${branchToken}-${Date.now()}-${randomToken}`;
+}
+
 function money(value) {
   return `RM ${Number(value || 0).toFixed(2)}`;
 }
@@ -1584,6 +1661,7 @@ function renderAll() {
   renderInventoryOverview();
   renderGlobalDashboard();
   renderManagementLists();
+  renderIntegrationOverview();
   renderStockAdjustmentList();
   renderAdminAccess();
   renderOperatorAccess();
@@ -1782,6 +1860,59 @@ function renderPrinterSettings() {
   }
 }
 
+function renderIntegrationOverview() {
+  if (!els.integrationOverview) return;
+  const activeSales = getActiveSales();
+  const references = activeSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
+  const simplePayRows = references.filter((item) => item.simplePayStatus !== "not-used");
+  const affiliateRows = references.filter((item) => item.affiliateStatus !== "not-used");
+  const simplePayPending = simplePayRows.filter((item) => item.simplePayStatus === "pending").length;
+  const affiliatePending = affiliateRows.filter((item) => item.affiliateStatus === "pending").length;
+  const markedFailedCount = references.filter((item) =>
+    item.simplePayStatus === "failed" || item.affiliateStatus === "failed"
+  ).length;
+  const integrityIssues = getIntegrationIssues(activeSales);
+  const failedCount = markedFailedCount + integrityIssues.length;
+  const issueHint = integrityIssues[0]?.message || "在交易记录打开“关联资料”处理";
+  els.integrationOverview.innerHTML = `
+    <div class="management-row">
+      <div>
+        <strong>连接模式</strong>
+        <small>订单内保存参考号，暂不进行跨项目实时查询</small>
+      </div>
+      <span>低成本手动关联</span>
+    </div>
+    <div class="management-row">
+      <div>
+        <strong>SimplePay</strong>
+        <small>${simplePayRows.length} 笔使用记录</small>
+      </div>
+      <span>${simplePayPending} 笔待确认</span>
+    </div>
+    <div class="management-row">
+      <div>
+        <strong>简单联盟</strong>
+        <small>${affiliateRows.length} 笔含推荐或联盟资料</small>
+      </div>
+      <span>${affiliatePending} 笔待关联</span>
+    </div>
+    <div class="management-row">
+      <div>
+        <strong>关联异常</strong>
+        <small>${escapeHtml(issueHint)}</small>
+      </div>
+      <span>${failedCount} 笔</span>
+    </div>
+    <div class="management-row">
+      <div>
+        <strong>价格来源</strong>
+        <small>POS 当前仍使用本机菜单价格；正式融合后以联盟配套为准</small>
+      </div>
+      <span>联盟配套 RM 180</span>
+    </div>
+  `;
+}
+
 function daysUntil(dateValue) {
   const target = new Date(dateValue);
   const today = new Date();
@@ -1816,11 +1947,9 @@ function updateSaleFollowUp(saleId, status) {
   sales = sales.map((item) => item.id === saleId ? { ...item, followUp: nextFollowUp } : item);
   save(STORAGE_KEYS.sales, sales);
   const updatedSale = sales.find((item) => item.id === saleId);
-  if (hasCloud() && navigator.onLine) {
-    window.cloudPOS.saveSale(updatedSale).catch((error) => console.warn("Follow-up sync failed", error));
-  } else {
-    queuePendingSaleUpdate(updatedSale);
-  }
+  pendingSales = pendingSales.map((item) => item.id === saleId ? updatedSale : item);
+  savePendingSales();
+  syncSaleUpdateToCloud(updatedSale, "客户跟进");
   writeAuditLog("followup.update", {
     saleId,
     customer: sale.customer?.name || "",
@@ -1846,6 +1975,209 @@ function getSaleSyncText(sale) {
   return "已处理";
 }
 
+function getIntegrationStatusText(status, pendingText = "待关联") {
+  if (status === "linked") return "已关联";
+  if (status === "failed") return "关联异常";
+  if (status === "pending") return pendingText;
+  return "未使用";
+}
+
+function getSaleIntegrationSummary(sale) {
+  const normalized = normalizeSaleExternalReferences(sale);
+  const references = normalized.externalReferences;
+  return `SimplePay ${getIntegrationStatusText(references.simplePayStatus, "待确认")} · 联盟 ${getIntegrationStatusText(references.affiliateStatus)}`;
+}
+
+function getIntegrationIssues(source = getActiveSales()) {
+  const issues = [];
+  const posOrderIds = new Map();
+  const simplePayReferences = new Map();
+  const affiliateOrderIds = new Map();
+  for (const sale of source) {
+    const references = normalizeSaleExternalReferences(sale).externalReferences;
+    const checks = [
+      ["POS 订单号", references.posOrderId, posOrderIds],
+      ["SimplePay 参考号", references.simplePayReference, simplePayReferences],
+      ["联盟订单号", references.affiliateOrderId, affiliateOrderIds]
+    ];
+    for (const [label, value, seen] of checks) {
+      if (!value && label === "POS 订单号") {
+        issues.push({ saleIds: [sale.id], message: `${sale.id} 缺少 POS 订单号` });
+        continue;
+      }
+      if (!value) continue;
+      if (seen.has(value) && seen.get(value) !== sale.id) {
+        issues.push({
+          saleIds: [seen.get(value), sale.id],
+          message: `${label} ${value} 重复用于 ${seen.get(value)} 与 ${sale.id}`
+        });
+      } else {
+        seen.set(value, sale.id);
+      }
+    }
+    if (references.simplePayStatus === "linked" && !references.simplePayReference) {
+      issues.push({ saleIds: [sale.id], message: `${sale.id} 的 SimplePay 已关联但缺少参考号` });
+    }
+    if (references.affiliateStatus === "linked" && !references.affiliateOrderId) {
+      issues.push({ saleIds: [sale.id], message: `${sale.id} 的联盟已关联但缺少订单号` });
+    }
+  }
+  return issues;
+}
+
+function matchesIntegrationFilter(sale, filter, issueSaleIds = new Set()) {
+  if (filter === "all") return true;
+  const references = normalizeSaleExternalReferences(sale).externalReferences;
+  if (filter === "pending") {
+    return references.simplePayStatus === "pending" || references.affiliateStatus === "pending";
+  }
+  if (filter === "simplepay-pending") return references.simplePayStatus === "pending";
+  if (filter === "affiliate-pending") return references.affiliateStatus === "pending";
+  if (filter === "linked") {
+    return references.simplePayStatus === "linked" || references.affiliateStatus === "linked";
+  }
+  if (filter === "failed") {
+    return references.simplePayStatus === "failed"
+      || references.affiliateStatus === "failed"
+      || issueSaleIds.has(sale.id);
+  }
+  return true;
+}
+
+async function syncSaleUpdateToCloud(sale, reason = "订单资料") {
+  queuePendingSaleUpdate(sale);
+  if (pendingSales.some((item) => item.id === sale.id)) return false;
+  if (!hasCloud() || !navigator.onLine) return false;
+  try {
+    await window.cloudPOS.saveSale(sale);
+    markSaleUpdateSynced(sale.id);
+    updateCloudStatus(`${reason}已同步`, true);
+    return true;
+  } catch (error) {
+    updateCloudStatus(`${reason}待同步`);
+    console.warn(`${reason} sync failed`, error);
+    return false;
+  }
+}
+
+function openIntegrationEditor(saleId) {
+  const sale = sales.find((item) => item.id === saleId);
+  if (!sale || !canManageBranch(sale.branchId || "hq")) return;
+  const normalized = normalizeSaleExternalReferences(sale);
+  const references = normalized.externalReferences;
+  editingIntegrationSaleId = sale.id;
+  els.integrationOrderNo.textContent = `订单号：${sale.id}`;
+  els.integrationPosOrderId.value = references.posOrderId || sale.id;
+  els.integrationSimplePayReference.value = references.simplePayReference || "";
+  els.integrationSimplePayStatus.value = references.simplePayStatus;
+  els.integrationAffiliateReferralCode.value = references.affiliateReferralCode || "";
+  els.integrationAffiliateOrderId.value = references.affiliateOrderId || "";
+  els.integrationAffiliateStatus.value = references.affiliateStatus;
+  els.integrationDialog.showModal();
+}
+
+function closeIntegrationEditor() {
+  editingIntegrationSaleId = "";
+  els.integrationForm.reset();
+  if (els.integrationDialog.open) els.integrationDialog.close();
+}
+
+async function copyIntegrationOrderId() {
+  const orderId = els.integrationPosOrderId.value;
+  if (!orderId) return;
+  try {
+    await navigator.clipboard.writeText(orderId);
+  } catch {
+    els.integrationPosOrderId.focus();
+    els.integrationPosOrderId.select();
+    document.execCommand("copy");
+  }
+  const originalText = els.copyIntegrationOrderIdBtn.textContent;
+  els.copyIntegrationOrderIdBtn.textContent = "已复制";
+  setTimeout(() => {
+    els.copyIntegrationOrderIdBtn.textContent = originalText;
+  }, 1200);
+}
+
+function saveIntegrationDetails(event) {
+  event.preventDefault();
+  const sale = sales.find((item) => item.id === editingIntegrationSaleId);
+  if (!sale || !canManageBranch(sale.branchId || "hq")) {
+    closeIntegrationEditor();
+    return;
+  }
+  const simplePayReference = els.integrationSimplePayReference.value.trim();
+  const simplePayStatus = els.integrationSimplePayStatus.value;
+  const affiliateReferralCode = els.integrationAffiliateReferralCode.value.trim().toUpperCase();
+  const affiliateOrderId = els.integrationAffiliateOrderId.value.trim();
+  const affiliateStatus = els.integrationAffiliateStatus.value;
+  if (simplePayStatus === "linked" && !simplePayReference) {
+    alert("SimplePay 标记为已关联时必须填写参考号。");
+    return;
+  }
+  if (affiliateStatus === "linked" && !affiliateOrderId) {
+    alert("联盟标记为已关联时必须填写联盟订单号。");
+    return;
+  }
+  const duplicateSimplePaySale = simplePayReference && sales.find((item) =>
+    item.id !== sale.id
+    && normalizeSaleExternalReferences(item).externalReferences.simplePayReference === simplePayReference
+  );
+  if (duplicateSimplePaySale) {
+    alert(`SimplePay 参考号已用于订单 ${duplicateSimplePaySale.id}。`);
+    return;
+  }
+  const duplicateAffiliateSale = affiliateOrderId && sales.find((item) =>
+    item.id !== sale.id
+    && normalizeSaleExternalReferences(item).externalReferences.affiliateOrderId === affiliateOrderId
+  );
+  if (duplicateAffiliateSale) {
+    alert(`联盟订单号已关联 POS 订单 ${duplicateAffiliateSale.id}。`);
+    return;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const updatedBy = getCurrentActor();
+  const updatedSale = normalizeSaleExternalReferences({
+    ...sale,
+    customer: {
+      ...(sale.customer || {}),
+      referralCode: affiliateReferralCode
+    },
+    payment: {
+      ...(sale.payment || {}),
+      reference: sale.payment?.method === "简单支付 / SimplePay"
+        ? simplePayReference
+        : (sale.payment?.reference || "")
+    },
+    externalReferences: {
+      ...(sale.externalReferences || {}),
+      posOrderId: sale.externalReferences?.posOrderId || sale.id,
+      simplePayReference,
+      simplePayStatus,
+      affiliateReferralCode,
+      affiliateOrderId,
+      affiliateStatus,
+      updatedAt,
+      updatedBy
+    },
+    syncStatus: "pending-update"
+  });
+  sales = sales.map((item) => item.id === sale.id ? updatedSale : item);
+  pendingSales = pendingSales.map((item) => item.id === sale.id ? updatedSale : item);
+  save(STORAGE_KEYS.sales, sales);
+  savePendingSales();
+  syncSaleUpdateToCloud(updatedSale, "订单关联资料");
+  writeAuditLog("sale.integration.update", {
+    saleId: sale.id,
+    branchId: sale.branchId || "hq",
+    simplePayStatus,
+    affiliateStatus
+  });
+  closeIntegrationEditor();
+  renderAll();
+}
+
 function getActiveSales(source = sales) {
   return source.filter((sale) => !isSaleVoided(sale));
 }
@@ -1856,6 +2188,10 @@ function voidSale(saleId) {
   if (!sale || isSaleVoided(sale)) return;
   if (!canVoidSale(sale)) {
     alert("员工只能处理自己授权分行的退款/作废。");
+    return;
+  }
+  if (navigator.onLine && hasCloud() && pendingSales.some((item) => item.id === saleId)) {
+    alert("订单首次云端同步仍在进行，请稍后再退款。断网订单仍可直接作废。");
     return;
   }
   if (!confirm(`确定作废订单 ${sale.id} 并回补库存吗？`)) return;
@@ -2201,7 +2537,7 @@ async function checkout() {
   const serviceEnd = new Date(createdAt);
   serviceEnd.setDate(serviceEnd.getDate() + Number(appSettings.serviceDays || 21));
 
-  const saleId = `POS${Date.now()}`;
+  const saleId = createPosOrderId();
   const affiliateReferralCode = els.affiliateReferralCodeInput.value.trim().toUpperCase();
   const sale = {
     id: saleId,
@@ -2234,8 +2570,12 @@ async function checkout() {
     externalReferences: {
       posOrderId: saleId,
       simplePayReference: paymentMethod === "简单支付 / SimplePay" ? paymentReference : "",
+      simplePayStatus: paymentMethod === "简单支付 / SimplePay"
+        ? (paymentReference ? "linked" : "pending")
+        : "not-used",
       affiliateReferralCode,
-      affiliateOrderId: ""
+      affiliateOrderId: "",
+      affiliateStatus: affiliateReferralCode ? "pending" : "not-used"
     },
     syncStatus: navigator.onLine && hasCloud() ? "queued" : "pending"
   };
@@ -2267,7 +2607,10 @@ async function checkout() {
   if (els.paymentDialog.open) els.paymentDialog.close();
   showReceipt(sale);
   renderAll();
-  syncSaleToCloud(sale).then(() => renderSales());
+  syncSaleToCloud(sale).then(async () => {
+    await syncPendingSaleUpdates();
+    renderSales();
+  });
 }
 
 function showReceipt(sale) {
@@ -2436,11 +2779,17 @@ function renderSales() {
   const selectedDate = els.salesDateInput.value;
   const keyword = els.salesSearchInput.value.trim().toLowerCase();
   const paymentFilter = els.salesPaymentFilter.value;
+  const integrationFilter = els.salesIntegrationFilter.value;
+  const integrationIssues = getIntegrationIssues(
+    getActiveSales().filter((sale) => canManageBranch(sale.branchId || "hq"))
+  );
+  const integrationIssueSaleIds = new Set(integrationIssues.flatMap((issue) => issue.saleIds));
   const selectedSales = sales.filter((sale) => {
     if (!canManageBranch(sale.branchId || "hq")) return false;
     const matchDate = inputDate(new Date(sale.createdAt)) === selectedDate;
     if (!matchDate) return false;
     if (paymentFilter !== "all" && (sale.payment?.method || "现金") !== paymentFilter) return false;
+    if (!matchesIntegrationFilter(sale, integrationFilter, integrationIssueSaleIds)) return false;
     if (!keyword) return true;
     const haystack = [
       sale.id,
@@ -2487,9 +2836,12 @@ function renderSales() {
       <span class="product-meta">付款：${escapeHtml(sale.payment?.method || "现金")}${sale.payment?.reference ? ` · ${escapeHtml(sale.payment.reference)}` : ""}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
       ${sale.customer?.referralCode ? `<span class="product-meta">联盟推荐码：${escapeHtml(sale.customer.referralCode)}</span>` : ""}
+      <span class="product-meta">关联：${escapeHtml(getSaleIntegrationSummary(sale))}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
+      <button class="ghost" type="button" data-edit-integration>关联资料</button>
       ${canVoidSale(sale) ? '<button class="ghost danger" type="button" data-void-sale>退款 / 作废并回补库存</button>' : ""}
     `;
+    row.querySelector("[data-edit-integration]").addEventListener("click", () => openIntegrationEditor(sale.id));
     const voidButton = row.querySelector("[data-void-sale]");
     if (voidButton) voidButton.addEventListener("click", () => voidSale(sale.id));
     els.salesList.append(row);
@@ -2796,6 +3148,67 @@ function exportDailySettlement() {
   downloadCsv(`daily-settlement-${selectedDate}.csv`, rows);
 }
 
+function exportIntegrationQueue() {
+  if (!requireOperations()) return;
+  const manageableSales = getActiveSales()
+    .filter((sale) => canManageBranch(sale.branchId || "hq"))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const issues = getIntegrationIssues(manageableSales);
+  const issueSaleIds = new Set(issues.flatMap((issue) => issue.saleIds));
+  const queue = manageableSales.filter((sale) => {
+    const references = normalizeSaleExternalReferences(sale).externalReferences;
+    return references.simplePayStatus === "pending"
+      || references.affiliateStatus === "pending"
+      || references.simplePayStatus === "failed"
+      || references.affiliateStatus === "failed"
+      || issueSaleIds.has(sale.id);
+  });
+  if (!queue.length) {
+    alert("目前没有待关联或异常订单。");
+    return;
+  }
+  const rows = [[
+    "POS订单号",
+    "时间",
+    "分行",
+    "客户",
+    "电话",
+    "金额",
+    "SimplePay状态",
+    "SimplePay参考号",
+    "联盟状态",
+    "联盟推荐码",
+    "联盟订单号",
+    "问题"
+  ]];
+  for (const sale of queue) {
+    const references = normalizeSaleExternalReferences(sale).externalReferences;
+    const issueText = issues
+      .filter((issue) => issue.saleIds.includes(sale.id))
+      .map((issue) => issue.message)
+      .join("; ");
+    const markedFailed = [
+      references.simplePayStatus === "failed" ? "SimplePay 已标记异常" : "",
+      references.affiliateStatus === "failed" ? "联盟已标记异常" : ""
+    ].filter(Boolean).join("; ");
+    rows.push([
+      references.posOrderId || sale.id,
+      new Date(sale.createdAt).toLocaleString(),
+      sale.branchName || getBranchName(sale.branchId || "hq"),
+      sale.customer?.name || "",
+      sale.customer?.phone || "",
+      sale.total,
+      getIntegrationStatusText(references.simplePayStatus, "待确认"),
+      references.simplePayReference || "",
+      getIntegrationStatusText(references.affiliateStatus),
+      references.affiliateReferralCode || "",
+      references.affiliateOrderId || "",
+      [issueText, markedFailed].filter(Boolean).join("; ")
+    ]);
+  }
+  downloadCsv(`integration-queue-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
 function exportInventory() {
   if (!requireAdmin()) return;
   const rows = [["商品", "SKU", "分类", "售价", "分行", "库存"]];
@@ -2967,9 +3380,9 @@ function restoreBackupFile(file) {
       branches = backup.branches;
       authorizedUsers = Array.isArray(backup.authorizedUsers) ? backup.authorizedUsers : defaultAuthorizedUsers;
       products = backup.products;
-      sales = backup.sales;
-      pendingSales = Array.isArray(backup.pendingSales) ? backup.pendingSales : [];
-      pendingSaleUpdates = Array.isArray(backup.pendingSaleUpdates) ? backup.pendingSaleUpdates : [];
+      sales = backup.sales.map(normalizeSaleExternalReferences);
+      pendingSales = (Array.isArray(backup.pendingSales) ? backup.pendingSales : []).map(normalizeSaleExternalReferences);
+      pendingSaleUpdates = (Array.isArray(backup.pendingSaleUpdates) ? backup.pendingSaleUpdates : []).map(normalizeSaleExternalReferences);
       pendingProducts = Array.isArray(backup.pendingProducts) ? backup.pendingProducts : [];
       pendingStockAdjustments = Array.isArray(backup.pendingStockAdjustments) ? backup.pendingStockAdjustments : [];
       pendingAuditLogs = Array.isArray(backup.pendingAuditLogs) ? backup.pendingAuditLogs : [];
@@ -3167,7 +3580,9 @@ els.quickPaymentButtons.addEventListener("click", (event) => {
 els.salesDateInput.addEventListener("change", renderSales);
 els.salesSearchInput.addEventListener("input", renderSales);
 els.salesPaymentFilter.addEventListener("change", renderSales);
+els.salesIntegrationFilter.addEventListener("change", renderSales);
 els.exportDailySettlementBtn.addEventListener("click", exportDailySettlement);
+els.exportIntegrationQueueBtn.addEventListener("click", exportIntegrationQueue);
 els.menuSearchInput.addEventListener("input", renderMenuProductList);
 els.inventoryBranchFilter.addEventListener("change", renderInventoryOverview);
 els.inventorySearchInput.addEventListener("input", renderInventoryOverview);
@@ -3234,6 +3649,9 @@ els.seedBtn.addEventListener("click", () => {
 });
 els.closeReceiptBtn.addEventListener("click", () => els.receiptDialog.close());
 els.printReceiptBtn.addEventListener("click", () => window.print());
+els.integrationForm.addEventListener("submit", saveIntegrationDetails);
+els.closeIntegrationBtn.addEventListener("click", closeIntegrationEditor);
+els.copyIntegrationOrderIdBtn.addEventListener("click", copyIntegrationOrderId);
 els.bluetoothPrintReceiptBtn.addEventListener("click", () => printBluetoothReceipt());
 els.printerPaperWidth.addEventListener("change", savePrinterSettings);
 els.printerAutoPrint.addEventListener("change", savePrinterSettings);

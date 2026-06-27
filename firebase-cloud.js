@@ -179,6 +179,10 @@ async function saveSale(sale) {
 
 async function saveCheckout(sale) {
   await runTransaction(db, async (transaction) => {
+    const saleRef = doc(db, "sales", sale.id);
+    const existingSale = await transaction.get(saleRef);
+    if (existingSale.exists()) return;
+
     const productRefs = sale.items.map((item) => doc(db, "products", item.id));
     const snapshots = [];
     for (const productRef of productRefs) {
@@ -204,7 +208,7 @@ async function saveCheckout(sale) {
       });
     });
 
-    transaction.set(doc(db, "sales", sale.id), {
+    transaction.set(saleRef, {
       ...sale,
       syncStatus: "synced",
       syncedAt: serverTimestamp()

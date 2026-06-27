@@ -164,6 +164,12 @@
         </div>
 
         <div class="panel-subsection" data-view-panel="settings">
+          <h3>三系统融合准备</h3>
+          <p class="helper-text">当前采用低成本手动关联，不会持续读取 SimplePay 或联盟项目，也不会阻塞 POS 收银。</p>
+          <div id="integrationOverview" class="management-list"></div>
+        </div>
+
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>交班记录</h3>
           <div id="shiftList" class="management-list"></div>
         </div>
@@ -316,7 +322,7 @@
       </div>
       <div class="toolbar">
         <input id="salesDateInput" type="date" aria-label="销售日期">
-        <input id="salesSearchInput" placeholder="搜索客户 / 电话 / 订单号" aria-label="搜索销售记录">
+        <input id="salesSearchInput" placeholder="搜索客户 / 电话 / 订单号 / 推荐码" aria-label="搜索销售记录">
         <select id="salesPaymentFilter" aria-label="按付款方式筛选">
           <option value="all">全部付款</option>
           <option value="现金">现金</option>
@@ -326,8 +332,17 @@
           <option value="银行卡">银行卡</option>
           <option value="简单支付 / SimplePay">简单支付 / SimplePay</option>
         </select>
+        <select id="salesIntegrationFilter" aria-label="按关联状态筛选">
+          <option value="all">全部关联状态</option>
+          <option value="pending">全部待处理</option>
+          <option value="simplepay-pending">SimplePay 待确认</option>
+          <option value="affiliate-pending">联盟待关联</option>
+          <option value="linked">已有外部关联</option>
+          <option value="failed">关联异常</option>
+        </select>
         <button id="todaySalesBtn" class="ghost" type="button">今天</button>
         <button id="exportDailySettlementBtn" class="ghost" type="button">导出当天结算</button>
+        <button id="exportIntegrationQueueBtn" class="ghost" type="button">导出待关联清单</button>
       </div>
       <div id="dailyPaymentSummaryList" class="management-list compact-list"></div>
       <div id="salesList" class="sales-list"></div>
@@ -420,6 +435,59 @@
       </div>
       <button id="confirmPaymentBtn" class="primary" type="button">确认收款</button>
     </div>
+  </dialog>
+
+  <dialog id="integrationDialog">
+    <form id="integrationForm" class="integration-form">
+      <div class="panel-header">
+        <div>
+          <h2>订单关联资料</h2>
+          <p id="integrationOrderNo">订单号</p>
+        </div>
+        <button id="closeIntegrationBtn" class="ghost" type="button">关闭</button>
+      </div>
+      <label>
+        POS 订单号
+        <span class="integration-id-row">
+          <input id="integrationPosOrderId" readonly>
+          <button id="copyIntegrationOrderIdBtn" class="ghost" type="button">复制</button>
+        </span>
+      </label>
+      <div class="integration-grid">
+        <label>
+          SimplePay 参考号
+          <input id="integrationSimplePayReference" autocomplete="off" placeholder="付款或交易参考号">
+        </label>
+        <label>
+          SimplePay 状态
+          <select id="integrationSimplePayStatus">
+            <option value="not-used">未使用</option>
+            <option value="pending">待确认</option>
+            <option value="linked">已关联</option>
+            <option value="failed">关联异常</option>
+          </select>
+        </label>
+        <label>
+          联盟推荐码
+          <input id="integrationAffiliateReferralCode" autocomplete="off" placeholder="推荐码">
+        </label>
+        <label>
+          联盟订单号
+          <input id="integrationAffiliateOrderId" autocomplete="off" placeholder="联盟订单号">
+        </label>
+        <label>
+          联盟状态
+          <select id="integrationAffiliateStatus">
+            <option value="not-used">未使用</option>
+            <option value="pending">待关联</option>
+            <option value="linked">已关联</option>
+            <option value="failed">关联异常</option>
+          </select>
+        </label>
+      </div>
+      <p class="helper-text">这些资料只随订单保存，不会主动查询 SimplePay 或联盟系统。</p>
+      <button class="primary" type="submit">保存关联资料</button>
+    </form>
   </dialog>
 
   <dialog id="receiptDialog">
