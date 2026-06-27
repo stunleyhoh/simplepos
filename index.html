@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0f766e">
-  <title>简单草本 POS 系统</title>
+  <title>简单POS</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -12,7 +12,7 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">可上线 / 可离线</p>
-      <h1>简单草本 POS 系统</h1>
+      <h1>简单POS</h1>
     </div>
     <div class="status-row">
       <span id="networkStatus" class="status">检测中</span>
@@ -247,11 +247,27 @@
         </div>
 
         <form id="productForm" class="product-form" data-view-panel="menu">
-          <input id="nameInput" required placeholder="商品名称">
-          <input id="barcodeInput" placeholder="条码 / SKU">
-          <input id="categoryInput" required placeholder="分类">
-          <input id="priceInput" required type="number" min="0" step="0.01" placeholder="售价">
-          <button class="primary" type="submit">保存商品</button>
+          <p class="helper-text">新增商品，或从下方现有菜单点击“编辑资料 / 价格”。商品库存请到库存页调整。</p>
+          <label>
+            商品名称
+            <input id="nameInput" required placeholder="商品名称">
+          </label>
+          <label>
+            条码 / SKU
+            <input id="barcodeInput" placeholder="条码 / SKU">
+          </label>
+          <label>
+            分类
+            <input id="categoryInput" required placeholder="分类">
+          </label>
+          <label>
+            售价（RM）
+            <input id="priceInput" required type="number" min="0" step="0.01" placeholder="例如：150.00">
+          </label>
+          <div class="product-form-actions">
+            <button id="saveProductBtn" class="primary" type="submit">新增商品</button>
+            <button id="cancelProductEditBtn" class="ghost hidden" type="button">取消编辑</button>
+          </div>
         </form>
 
         <div class="panel-subsection" data-view-panel="menu">

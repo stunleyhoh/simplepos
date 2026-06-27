@@ -21,7 +21,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.56";
+const APP_VERSION = "v0.57";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -80,6 +80,7 @@ let currentView = "order";
 let paymentMethodInitialized = false;
 let showMoreSales = false;
 let lastReceiptSale = null;
+let editingProductId = "";
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -180,6 +181,8 @@ const els = {
   barcodeInput: document.querySelector("#barcodeInput"),
   categoryInput: document.querySelector("#categoryInput"),
   priceInput: document.querySelector("#priceInput"),
+  saveProductBtn: document.querySelector("#saveProductBtn"),
+  cancelProductEditBtn: document.querySelector("#cancelProductEditBtn"),
   initCloudBtn: document.querySelector("#initCloudBtn"),
   syncPendingBtn: document.querySelector("#syncPendingBtn"),
   exportBtn: document.querySelector("#exportBtn"),
@@ -1626,19 +1629,32 @@ function renderMenuProductList() {
         <strong>${escapeHtml(product.name)}</strong>
         <small>${escapeHtml(product.category || "-")} · SKU ${escapeHtml(product.barcode || "-")}</small>
       </div>
-      <small>${money(product.price)} · ${escapeHtml(getBranchName(currentBranchId))}库存 ${getBranchStock(product)}</small>
+      <div class="row-actions">
+        <small>${money(product.price)} · ${escapeHtml(getBranchName(currentBranchId))}库存 ${getBranchStock(product)}</small>
+        <button class="ghost" type="button" data-edit-product>编辑资料 / 价格</button>
+      </div>
     `;
-    row.addEventListener("click", () => fillProductForm(product));
+    row.querySelector("[data-edit-product]").addEventListener("click", () => fillProductForm(product));
     els.menuProductList.append(row);
   }
 }
 
 function fillProductForm(product) {
+  editingProductId = product.id;
   els.nameInput.value = product.name || "";
   els.barcodeInput.value = product.barcode || "";
   els.categoryInput.value = product.category || "";
   els.priceInput.value = Number(product.price || 0);
+  els.saveProductBtn.textContent = "更新商品";
+  els.cancelProductEditBtn.classList.remove("hidden");
   els.nameInput.focus();
+}
+
+function resetProductFormEditor() {
+  editingProductId = "";
+  els.productForm.reset();
+  els.saveProductBtn.textContent = "新增商品";
+  els.cancelProductEditBtn.classList.add("hidden");
 }
 
 function renderInventoryOverview() {
@@ -2587,7 +2603,7 @@ function saveProduct(event) {
   if (!requireAdmin()) return;
   products = products.map((item) => normalizeProductBranches(item));
   const product = {
-    id: createId(),
+    id: editingProductId || createId(),
     name: els.nameInput.value.trim(),
     barcode: els.barcodeInput.value.trim(),
     category: els.categoryInput.value.trim(),
@@ -2600,11 +2616,19 @@ function saveProduct(event) {
     return;
   }
 
+  const barcodeConflict = product.barcode && products.find((item) =>
+    item.barcode === product.barcode && item.id !== editingProductId
+  );
+  if (barcodeConflict && editingProductId) {
+    alert(`条码 / SKU 已由“${barcodeConflict.name}”使用。`);
+    return;
+  }
   const sameBarcode = product.barcode && products.find((item) => item.barcode === product.barcode);
+  const existingProduct = products.find((item) => item.id === editingProductId) || sameBarcode;
   let savedProduct = product;
-  if (sameBarcode) {
+  if (existingProduct) {
     products = products.map((item) => {
-      if (item.id !== sameBarcode.id) return item;
+      if (item.id !== existingProduct.id) return item;
       savedProduct = {
         ...item,
         name: product.name,
@@ -2627,7 +2651,7 @@ function saveProduct(event) {
     barcode: savedProduct.barcode,
     price: savedProduct.price
   });
-  els.productForm.reset();
+  resetProductFormEditor();
   renderAll();
 }
 
@@ -3163,6 +3187,7 @@ els.branchForm.addEventListener("submit", addBranch);
 els.userForm.addEventListener("submit", addAuthorizedUser);
 els.settingsForm.addEventListener("submit", saveSettings);
 els.productForm.addEventListener("submit", saveProduct);
+els.cancelProductEditBtn.addEventListener("click", resetProductFormEditor);
 els.initCloudBtn.addEventListener("click", initializeCloudData);
 els.syncPendingBtn.addEventListener("click", syncPendingChanges);
 els.exportBtn.addEventListener("click", exportSales);

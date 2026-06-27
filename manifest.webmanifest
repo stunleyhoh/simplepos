@@ -1,6 +1,6 @@
 {
-  "name": "简单 POS 系统",
-  "short_name": "POS",
+  "name": "简单POS",
+  "short_name": "简单POS",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#f6f8f7",
