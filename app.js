@@ -21,7 +21,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.62";
+const APP_VERSION = "v0.63";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -82,6 +82,7 @@ let showMoreSales = false;
 let lastReceiptSale = null;
 let editingProductId = "";
 let editingIntegrationSaleId = "";
+let showAllSalesDates = false;
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -220,6 +221,8 @@ const els = {
   inventoryOverviewList: document.querySelector("#inventoryOverviewList"),
   syncOverview: document.querySelector("#syncOverview"),
   integrationOverview: document.querySelector("#integrationOverview"),
+  runDiagnosticsBtn: document.querySelector("#runDiagnosticsBtn"),
+  diagnosticsOverview: document.querySelector("#diagnosticsOverview"),
   shiftList: document.querySelector("#shiftList"),
   auditList: document.querySelector("#auditList"),
   stockAdjustmentList: document.querySelector("#stockAdjustmentList"),
@@ -250,6 +253,7 @@ const els = {
   exportIntegrationQueueBtn: document.querySelector("#exportIntegrationQueueBtn"),
   toggleSalesLimitBtn: document.querySelector("#toggleSalesLimitBtn"),
   todaySalesBtn: document.querySelector("#todaySalesBtn"),
+  allSalesDatesBtn: document.querySelector("#allSalesDatesBtn"),
   salesList: document.querySelector("#salesList"),
   receiptDialog: document.querySelector("#receiptDialog"),
   receiptNo: document.querySelector("#receiptNo"),
@@ -1910,7 +1914,157 @@ function renderIntegrationOverview() {
       </div>
       <span>联盟配套 RM 180</span>
     </div>
+    <div class="row-actions integration-review-actions">
+      <button class="primary" type="button" data-review-integration="pending">处理待关联</button>
+      <button class="ghost" type="button" data-review-integration="failed">查看异常</button>
+    </div>
   `;
+  for (const button of els.integrationOverview.querySelectorAll("[data-review-integration]")) {
+    button.addEventListener("click", () => openIntegrationQueue(button.dataset.reviewIntegration));
+  }
+}
+
+function openIntegrationQueue(filter) {
+  showAllSalesDates = true;
+  showMoreSales = true;
+  els.salesIntegrationFilter.value = filter;
+  setAppView("transactions");
+  renderSales();
+}
+
+function duplicateValues(items, getValue) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const item of items) {
+    const value = String(getValue(item) || "").trim().toLowerCase();
+    if (!value) continue;
+    if (seen.has(value)) duplicates.add(value);
+    seen.add(value);
+  }
+  return [...duplicates];
+}
+
+function runLocalDiagnostics() {
+  const checks = [];
+  const addCheck = (label, level, detail) => checks.push({ label, level, detail });
+
+  try {
+    const key = "__simplepos_diagnostic__";
+    localStorage.setItem(key, "ok");
+    localStorage.removeItem(key);
+    addCheck("本机储存", "pass", "可正常写入");
+  } catch (error) {
+    addCheck("本机储存", "error", `无法写入：${error.message}`);
+  }
+
+  const duplicateBranchIds = duplicateValues(branches, (branch) => branch.id);
+  const invalidBranches = branches.filter((branch) => !branch.id || !branch.name);
+  addCheck(
+    "分行资料",
+    duplicateBranchIds.length || invalidBranches.length ? "error" : "pass",
+    duplicateBranchIds.length
+      ? `重复分行 ID：${duplicateBranchIds.join(", ")}`
+      : (invalidBranches.length ? `${invalidBranches.length} 笔资料不完整` : `${branches.length} 个分行正常`)
+  );
+
+  const duplicateProductIds = duplicateValues(products, (product) => product.id);
+  const duplicateBarcodes = duplicateValues(products, (product) => product.barcode);
+  const invalidStocks = [];
+  for (const product of products) {
+    for (const [branchId, stock] of Object.entries(normalizeProductBranches(product).branchStock || {})) {
+      if (!Number.isFinite(Number(stock)) || Number(stock) < 0) {
+        invalidStocks.push(`${product.name || product.id}@${branchId}`);
+      }
+    }
+  }
+  const productLevel = duplicateProductIds.length || duplicateBarcodes.length || invalidStocks.length ? "error" : "pass";
+  const productDetail = duplicateProductIds.length
+    ? `重复商品 ID：${duplicateProductIds.join(", ")}`
+    : duplicateBarcodes.length
+      ? `重复 SKU：${duplicateBarcodes.join(", ")}`
+      : invalidStocks.length
+        ? `库存异常：${invalidStocks.slice(0, 3).join(", ")}`
+        : `${products.length} 个商品及分行库存正常`;
+  addCheck("商品与库存", productLevel, productDetail);
+
+  const duplicateSaleIds = duplicateValues(sales, (sale) => sale.id);
+  const invalidSales = sales.filter((sale) =>
+    !sale.id
+    || !branches.some((branch) => branch.id === (sale.branchId || "hq"))
+    || !Array.isArray(sale.items)
+    || !Number.isFinite(Number(sale.total))
+  );
+  addCheck(
+    "销售订单",
+    duplicateSaleIds.length || invalidSales.length ? "error" : "pass",
+    duplicateSaleIds.length
+      ? `重复订单号：${duplicateSaleIds.join(", ")}`
+      : (invalidSales.length ? `${invalidSales.length} 笔订单结构异常` : `${sales.length} 笔订单结构正常`)
+  );
+
+  const duplicateEmails = duplicateValues(authorizedUsers, (user) => user.email);
+  const invalidUsers = authorizedUsers.filter((user) =>
+    !user.email || !branches.some((branch) => branch.id === user.branchId)
+  );
+  addCheck(
+    "员工授权",
+    duplicateEmails.length || invalidUsers.length ? "error" : "pass",
+    duplicateEmails.length
+      ? `重复邮箱：${duplicateEmails.join(", ")}`
+      : (invalidUsers.length ? `${invalidUsers.length} 位用户的授权分行无效` : `${authorizedUsers.length} 位授权用户正常`)
+  );
+
+  const integrationIssues = getIntegrationIssues(getActiveSales());
+  addCheck(
+    "外部系统关联",
+    integrationIssues.length ? "warning" : "pass",
+    integrationIssues.length ? `${integrationIssues.length} 个问题；${integrationIssues[0].message}` : "订单参考号未发现重复或缺失"
+  );
+
+  const pendingCount = pendingSales.length
+    + pendingSaleUpdates.length
+    + pendingProducts.length
+    + pendingStockAdjustments.length
+    + pendingAuditLogs.length;
+  const orphanUpdates = pendingSaleUpdates.filter((pending) =>
+    !sales.some((sale) => sale.id === pending.id)
+  );
+  addCheck(
+    "待同步队列",
+    orphanUpdates.length ? "error" : (pendingCount ? "warning" : "pass"),
+    orphanUpdates.length
+      ? `${orphanUpdates.length} 个订单更新找不到本机订单`
+      : (pendingCount ? `共有 ${pendingCount} 项等待网络同步` : "没有待同步资料")
+  );
+
+  const errors = checks.filter((check) => check.level === "error").length;
+  const warnings = checks.filter((check) => check.level === "warning").length;
+  const summaryLevel = errors ? "error" : (warnings ? "warning" : "pass");
+  const summaryText = errors
+    ? `${errors} 项错误，${warnings} 项提醒`
+    : (warnings ? `没有结构错误，${warnings} 项提醒` : "全部检查通过");
+  els.diagnosticsOverview.innerHTML = `
+    <div class="management-row diagnostic-${summaryLevel}">
+      <div>
+        <strong>自检结果</strong>
+        <small>${new Date().toLocaleString()}</small>
+      </div>
+      <span>${escapeHtml(summaryText)}</span>
+    </div>
+  `;
+  for (const check of checks) {
+    const row = document.createElement("div");
+    row.className = `management-row diagnostic-${check.level}`;
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(check.label)}</strong>
+        <small>${escapeHtml(check.detail)}</small>
+      </div>
+      <span>${check.level === "pass" ? "通过" : (check.level === "warning" ? "提醒" : "错误")}</span>
+    `;
+    els.diagnosticsOverview.append(row);
+  }
+  return { checks, errors, warnings };
 }
 
 function daysUntil(dateValue) {
@@ -2775,7 +2929,7 @@ async function testBluetoothPrinter() {
 }
 
 function renderSales() {
-  if (!els.salesDateInput.value) els.salesDateInput.value = inputDate();
+  if (!showAllSalesDates && !els.salesDateInput.value) els.salesDateInput.value = inputDate();
   const selectedDate = els.salesDateInput.value;
   const keyword = els.salesSearchInput.value.trim().toLowerCase();
   const paymentFilter = els.salesPaymentFilter.value;
@@ -2786,7 +2940,7 @@ function renderSales() {
   const integrationIssueSaleIds = new Set(integrationIssues.flatMap((issue) => issue.saleIds));
   const selectedSales = sales.filter((sale) => {
     if (!canManageBranch(sale.branchId || "hq")) return false;
-    const matchDate = inputDate(new Date(sale.createdAt)) === selectedDate;
+    const matchDate = showAllSalesDates || inputDate(new Date(sale.createdAt)) === selectedDate;
     if (!matchDate) return false;
     if (paymentFilter !== "all" && (sale.payment?.method || "现金") !== paymentFilter) return false;
     if (!matchesIntegrationFilter(sale, integrationFilter, integrationIssueSaleIds)) return false;
@@ -2803,9 +2957,12 @@ function renderSales() {
     return haystack.includes(keyword);
   });
   const total = selectedSales.reduce((sum, sale) => sum + (isSaleVoided(sale) ? 0 : sale.total), 0);
+  const dateLabel = showAllSalesDates ? "全部日期" : selectedDate;
   els.salesSummary.textContent = selectedSales.length
-    ? `${selectedSales.length} 单，共 ${money(total)}`
-    : "暂无销售";
+    ? `${dateLabel} · ${selectedSales.length} 单，共 ${money(total)}`
+    : `${dateLabel} · 暂无销售`;
+  els.todaySalesBtn.classList.toggle("active", !showAllSalesDates && selectedDate === inputDate());
+  els.allSalesDatesBtn.classList.toggle("active", showAllSalesDates);
   els.salesList.innerHTML = "";
   renderDailyPaymentSummary(selectedSales);
 
@@ -3577,7 +3734,10 @@ els.quickPaymentButtons.addEventListener("click", (event) => {
   localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
   renderCart();
 });
-els.salesDateInput.addEventListener("change", renderSales);
+els.salesDateInput.addEventListener("change", () => {
+  showAllSalesDates = false;
+  renderSales();
+});
 els.salesSearchInput.addEventListener("input", renderSales);
 els.salesPaymentFilter.addEventListener("change", renderSales);
 els.salesIntegrationFilter.addEventListener("change", renderSales);
@@ -3591,9 +3751,15 @@ els.toggleSalesLimitBtn.addEventListener("click", () => {
   renderSales();
 });
 els.todaySalesBtn.addEventListener("click", () => {
+  showAllSalesDates = false;
   els.salesDateInput.value = inputDate();
   renderSales();
 });
+els.allSalesDatesBtn.addEventListener("click", () => {
+  showAllSalesDates = true;
+  renderSales();
+});
+els.runDiagnosticsBtn.addEventListener("click", runLocalDiagnostics);
 els.quickCheckoutBtn.addEventListener("click", () => {
   setAppView("order");
   if (!isOperatorAllowedForCurrentBranch()) {

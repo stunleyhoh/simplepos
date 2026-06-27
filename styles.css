@@ -405,6 +405,12 @@ body[data-view="order"] .totals {
   color: var(--brand-dark);
 }
 
+.toolbar .ghost.active {
+  border-color: var(--brand);
+  color: var(--brand-dark);
+  background: #eef8f6;
+}
+
 body[data-view="order"] #totalText {
   font-size: 30px;
 }
@@ -705,6 +711,18 @@ body[data-view="order"] #checkoutBtn {
   display: block;
   color: var(--muted);
   margin-top: 2px;
+}
+
+.diagnostic-pass > span {
+  color: var(--brand-dark);
+}
+
+.diagnostic-warning > span {
+  color: #8a5a00;
+}
+
+.diagnostic-error > span {
+  color: var(--danger);
 }
 
 .row-actions {

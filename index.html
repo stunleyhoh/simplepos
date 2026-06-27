@@ -170,6 +170,19 @@
         </div>
 
         <div class="panel-subsection" data-view-panel="settings">
+          <div class="panel-header">
+            <div>
+              <h3>本机数据自检</h3>
+              <p>不连接云端，不产生 Firebase 读取。</p>
+            </div>
+            <button id="runDiagnosticsBtn" class="ghost" type="button">运行自检</button>
+          </div>
+          <div id="diagnosticsOverview" class="management-list">
+            <div class="empty">尚未运行本机自检</div>
+          </div>
+        </div>
+
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>交班记录</h3>
           <div id="shiftList" class="management-list"></div>
         </div>
@@ -341,6 +354,7 @@
           <option value="failed">关联异常</option>
         </select>
         <button id="todaySalesBtn" class="ghost" type="button">今天</button>
+        <button id="allSalesDatesBtn" class="ghost" type="button">全部日期</button>
         <button id="exportDailySettlementBtn" class="ghost" type="button">导出当天结算</button>
         <button id="exportIntegrationQueueBtn" class="ghost" type="button">导出待关联清单</button>
       </div>
