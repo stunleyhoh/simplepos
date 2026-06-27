@@ -21,7 +21,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.63";
+const APP_VERSION = "v0.67";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -83,6 +83,7 @@ let lastReceiptSale = null;
 let editingProductId = "";
 let editingIntegrationSaleId = "";
 let showAllSalesDates = false;
+let returnToSettlementAfterCashMovement = false;
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -104,6 +105,7 @@ function setAppView(view) {
   updateViewHeadings();
   renderAdminAccess();
   renderInventoryBranchFilter();
+  renderSalesBranchFilter();
   renderInventoryOverview();
   renderSales();
   if (!canAccessView(view)) {
@@ -135,6 +137,9 @@ const els = {
   shiftStatusText: document.querySelector("#shiftStatusText"),
   quickCheckoutBtn: document.querySelector("#quickCheckoutBtn"),
   closeShiftBtn: document.querySelector("#closeShiftBtn"),
+  cashMovementBtn: document.querySelector("#cashMovementBtn"),
+  shiftOpeningCashPanel: document.querySelector("#shiftOpeningCashPanel"),
+  shiftOpeningCashInput: document.querySelector("#shiftOpeningCashInput"),
   installBtn: document.querySelector("#installBtn"),
   seedBtn: document.querySelector("#seedBtn"),
   searchInput: document.querySelector("#searchInput"),
@@ -246,6 +251,7 @@ const els = {
   salesSummary: document.querySelector("#salesSummary"),
   salesDateInput: document.querySelector("#salesDateInput"),
   salesSearchInput: document.querySelector("#salesSearchInput"),
+  salesBranchFilter: document.querySelector("#salesBranchFilter"),
   salesPaymentFilter: document.querySelector("#salesPaymentFilter"),
   salesIntegrationFilter: document.querySelector("#salesIntegrationFilter"),
   dailyPaymentSummaryList: document.querySelector("#dailyPaymentSummaryList"),
@@ -279,7 +285,35 @@ const els = {
   integrationAffiliateOrderId: document.querySelector("#integrationAffiliateOrderId"),
   integrationAffiliateStatus: document.querySelector("#integrationAffiliateStatus"),
   closeIntegrationBtn: document.querySelector("#closeIntegrationBtn"),
-  copyIntegrationOrderIdBtn: document.querySelector("#copyIntegrationOrderIdBtn")
+  copyIntegrationOrderIdBtn: document.querySelector("#copyIntegrationOrderIdBtn"),
+  shiftSettlementDialog: document.querySelector("#shiftSettlementDialog"),
+  shiftSettlementForm: document.querySelector("#shiftSettlementForm"),
+  settlementShiftInfo: document.querySelector("#settlementShiftInfo"),
+  settlementOrders: document.querySelector("#settlementOrders"),
+  settlementTotal: document.querySelector("#settlementTotal"),
+  settlementExpectedCash: document.querySelector("#settlementExpectedCash"),
+  settlementVoids: document.querySelector("#settlementVoids"),
+  settlementPaymentList: document.querySelector("#settlementPaymentList"),
+  settlementWarnings: document.querySelector("#settlementWarnings"),
+  settlementOpeningCash: document.querySelector("#settlementOpeningCash"),
+  settlementCashIn: document.querySelector("#settlementCashIn"),
+  settlementCashOut: document.querySelector("#settlementCashOut"),
+  settlementCountedCash: document.querySelector("#settlementCountedCash"),
+  settlementCashDifference: document.querySelector("#settlementCashDifference"),
+  settlementNote: document.querySelector("#settlementNote"),
+  closeSettlementBtn: document.querySelector("#closeSettlementBtn"),
+  exportCurrentSettlementBtn: document.querySelector("#exportCurrentSettlementBtn"),
+  settlementCashMovementBtn: document.querySelector("#settlementCashMovementBtn"),
+  cashMovementDialog: document.querySelector("#cashMovementDialog"),
+  cashMovementForm: document.querySelector("#cashMovementForm"),
+  cashMovementShiftInfo: document.querySelector("#cashMovementShiftInfo"),
+  cashMovementType: document.querySelector("#cashMovementType"),
+  cashMovementAmount: document.querySelector("#cashMovementAmount"),
+  cashMovementReason: document.querySelector("#cashMovementReason"),
+  cashMovementInTotal: document.querySelector("#cashMovementInTotal"),
+  cashMovementOutTotal: document.querySelector("#cashMovementOutTotal"),
+  cashMovementList: document.querySelector("#cashMovementList"),
+  closeCashMovementBtn: document.querySelector("#closeCashMovementBtn")
 };
 
 function load(key, fallback) {
@@ -686,10 +720,12 @@ function renderBranchSelect() {
   }
   els.branchSelect.value = currentBranchId;
   els.branchStatus.textContent = getBranchName(els.branchSelect.value);
-  els.branchSelect.disabled = isBranchLockedToOperator();
-  els.branchSelect.title = isBranchLockedToOperator()
-    ? "收银员只能使用授权分行；管理员登录后可切换全部分行。"
-    : "管理员可切换总店与所有分行。";
+  els.branchSelect.disabled = isBranchLockedToOperator() || hasOpenShift();
+  els.branchSelect.title = hasOpenShift()
+    ? `当前班次属于 ${getCurrentShiftLabel()}，结班后才可切换分行。`
+    : isBranchLockedToOperator()
+      ? "收银员只能使用授权分行；管理员登录后可切换全部分行。"
+      : "管理员可切换总店与所有分行。";
 }
 
 function renderAdminAccess() {
@@ -735,6 +771,30 @@ function getActiveCashier() {
   return getAdminOperator() || getOperator();
 }
 
+function hasOpenShift() {
+  return Boolean(currentShift && !currentShift.closedAt);
+}
+
+function isShiftIdentity(email, branchId) {
+  return hasOpenShift()
+    && normalizeEmail(currentShift.operatorEmail) === normalizeEmail(email)
+    && currentShift.branchId === branchId;
+}
+
+function isCurrentShiftOwner() {
+  const operator = getActiveCashier();
+  return Boolean(operator && isShiftIdentity(operator.email, currentBranchId));
+}
+
+function canManageCurrentShift() {
+  return hasOpenShift() && (isAdmin() || isCurrentShiftOwner());
+}
+
+function getCurrentShiftLabel() {
+  if (!hasOpenShift()) return "";
+  return `${currentShift.operatorName || currentShift.operatorEmail || "原操作员"} · ${currentShift.branchName || getBranchName(currentShift.branchId)}`;
+}
+
 function isOperatorAllowedForCurrentBranch() {
   if (isAdmin()) return true;
   const operator = getOperator();
@@ -763,37 +823,94 @@ function saveShifts() {
   save(STORAGE_KEYS.shifts, shifts);
 }
 
-function ensureCurrentShift() {
+function ensureCurrentShift(openingCash = Number(els.shiftOpeningCashInput?.value || 0)) {
   const operator = getActiveCashier();
-  if (!operator) return;
-  if (currentShift && !currentShift.closedAt && currentShift.operatorEmail === operator.email && currentShift.branchId === currentBranchId) return;
+  if (!operator) return false;
+  if (hasOpenShift()) {
+    if (isShiftIdentity(operator.email, currentBranchId)) return true;
+    alert(`当前班次属于 ${getCurrentShiftLabel()}。请先由原员工恢复班次，或由管理员完成交班。`);
+    return false;
+  }
   currentShift = {
     id: `SHIFT${Date.now()}`,
     openedAt: new Date().toISOString(),
     branchId: currentBranchId,
     branchName: getBranchName(currentBranchId),
     operatorName: operator.name,
-    operatorEmail: operator.email
+    operatorEmail: operator.email,
+    openingCash: Math.max(0, Number(openingCash || 0)),
+    cashIn: 0,
+    cashOut: 0,
+    cashMovements: []
   };
   saveCurrentShift();
+  return true;
 }
 
-function getShiftSales(shift) {
+function getShiftAllSales(shift) {
   if (!shift) return [];
   const openedAt = new Date(shift.openedAt);
   const closedAt = shift.closedAt ? new Date(shift.closedAt) : new Date();
-  return getActiveSales().filter((sale) => {
+  return sales.filter((sale) => {
     const createdAt = new Date(sale.createdAt);
     return (sale.branchId || "hq") === shift.branchId && createdAt >= openedAt && createdAt <= closedAt;
   });
 }
 
+function getShiftSales(shift) {
+  return getActiveSales(getShiftAllSales(shift));
+}
+
+function getShiftCashMovementTotals(shift) {
+  const movements = Array.isArray(shift?.cashMovements) ? shift.cashMovements : [];
+  if (!movements.length) {
+    return {
+      cashIn: Math.max(0, Number(shift?.cashIn || 0)),
+      cashOut: Math.max(0, Number(shift?.cashOut || 0))
+    };
+  }
+  return movements.reduce((totals, movement) => {
+    const amount = Math.max(0, Number(movement.amount || 0));
+    if (movement.type === "out") totals.cashOut += amount;
+    else totals.cashIn += amount;
+    return totals;
+  }, { cashIn: 0, cashOut: 0 });
+}
+
 function getShiftSummary(shift) {
   const shiftSales = getShiftSales(shift);
+  const allShiftSales = getShiftAllSales(shift);
+  const voidedSales = allShiftSales.filter(isSaleVoided);
+  const shiftSaleIds = new Set(allShiftSales.map((sale) => sale.id));
+  const pendingOrderIds = new Set(
+    [...pendingSales, ...pendingSaleUpdates]
+      .filter((sale) => shiftSaleIds.has(sale.id))
+      .map((sale) => sale.id)
+  );
+  const normalizedReferences = shiftSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
+  const payments = getPaymentSummaryRows(shiftSales);
+  const cashSales = Number(payments.find((item) => item.method === "现金")?.total || 0);
+  const openingCash = Math.max(0, Number(shift.openingCash || 0));
+  const { cashIn, cashOut } = getShiftCashMovementTotals(shift);
   return {
     orders: shiftSales.length,
     total: shiftSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0),
-    payments: getPaymentSummaryRows(shiftSales)
+    payments,
+    cashSales,
+    openingCash,
+    cashIn,
+    cashOut,
+    expectedCash: openingCash + cashSales + cashIn - cashOut,
+    voidedOrders: voidedSales.length,
+    voidedTotal: voidedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0),
+    pendingOrderSync: pendingOrderIds.size,
+    pendingSyncTotal: pendingSales.length
+      + pendingSaleUpdates.length
+      + pendingProducts.length
+      + pendingStockAdjustments.length
+      + pendingAuditLogs.length,
+    simplePayPending: normalizedReferences.filter((item) => item.simplePayStatus === "pending").length,
+    affiliatePending: normalizedReferences.filter((item) => item.affiliateStatus === "pending").length
   };
 }
 
@@ -802,53 +919,497 @@ function closeCurrentShift() {
     alert("当前没有进行中的班次。");
     return;
   }
+  if (!canManageCurrentShift()) {
+    alert(`当前班次属于 ${getCurrentShiftLabel()}，只有原员工或管理员可以交班。`);
+    return;
+  }
+  openShiftSettlement();
+}
+
+function seedLegacyCashMovements(shift) {
+  if (!shift || (Array.isArray(shift.cashMovements) && shift.cashMovements.length)) return;
+  const movements = [];
+  if (Number(shift.cashIn || 0) > 0) {
+    movements.push({
+      id: `CASH-LEGACY-IN-${shift.id}`,
+      type: "in",
+      amount: Number(shift.cashIn),
+      reason: "旧版现金存入汇总",
+      createdAt: shift.openedAt,
+      actor: { name: shift.operatorName || "", email: shift.operatorEmail || "" },
+      legacy: true
+    });
+  }
+  if (Number(shift.cashOut || 0) > 0) {
+    movements.push({
+      id: `CASH-LEGACY-OUT-${shift.id}`,
+      type: "out",
+      amount: Number(shift.cashOut),
+      reason: "旧版现金取出汇总",
+      createdAt: shift.openedAt,
+      actor: { name: shift.operatorName || "", email: shift.operatorEmail || "" },
+      legacy: true
+    });
+  }
+  shift.cashMovements = movements;
+}
+
+function refreshCurrentShiftCashTotals() {
+  if (!currentShift) return;
+  const totals = getShiftCashMovementTotals(currentShift);
+  currentShift.cashIn = Number(totals.cashIn.toFixed(2));
+  currentShift.cashOut = Number(totals.cashOut.toFixed(2));
+  saveCurrentShift();
+}
+
+function openCashMovementDialog(returnToSettlement = false) {
+  if (!requireOperator()) return;
+  if (!currentShift || currentShift.closedAt) {
+    alert("请先开始班次，再登记现金流水。");
+    return;
+  }
+  if (!canManageCurrentShift()) {
+    alert(`当前班次属于 ${getCurrentShiftLabel()}，只有原员工或管理员可以登记现金流水。`);
+    return;
+  }
+  returnToSettlementAfterCashMovement = returnToSettlement;
+  if (returnToSettlement) closeShiftSettlementDialog();
+  renderCashMovementDialog();
+  els.cashMovementDialog.showModal();
+}
+
+function closeCashMovementDialog() {
+  if (els.cashMovementDialog.open) els.cashMovementDialog.close();
+}
+
+function handleCashMovementDialogClosed() {
+  const shouldReturn = returnToSettlementAfterCashMovement;
+  returnToSettlementAfterCashMovement = false;
+  if (shouldReturn && currentShift && !currentShift.closedAt) openShiftSettlement();
+}
+
+function renderCashMovementDialog() {
+  if (!currentShift) return;
+  seedLegacyCashMovements(currentShift);
+  refreshCurrentShiftCashTotals();
+  els.cashMovementShiftInfo.textContent = `${currentShift.operatorName || "-"} · ${currentShift.branchName || getBranchName(currentShift.branchId)} · ${new Date(currentShift.openedAt).toLocaleString()} 开始`;
+  els.cashMovementInTotal.textContent = money(currentShift.cashIn || 0);
+  els.cashMovementOutTotal.textContent = money(currentShift.cashOut || 0);
+  els.cashMovementList.innerHTML = "";
+  const movements = [...(currentShift.cashMovements || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  if (!movements.length) {
+    els.cashMovementList.innerHTML = '<div class="empty compact-empty">本班尚无现金存入或取出</div>';
+    return;
+  }
+  const reversedIds = new Set(movements.map((item) => item.reversalOf).filter(Boolean));
+  for (const movement of movements) {
+    const row = document.createElement("div");
+    row.className = "management-row";
+    const reversed = reversedIds.has(movement.id);
+    row.innerHTML = `
+      <div>
+        <strong>${movement.type === "out" ? "现金取出" : "现金存入"} · ${money(movement.amount)}</strong>
+        <small>${escapeHtml(movement.reason || "-")} · ${new Date(movement.createdAt).toLocaleString()} · ${escapeHtml(movement.actor?.name || "-")}</small>
+      </div>
+      <button class="ghost danger" type="button" data-reverse-cash ${reversed || movement.reversalOf ? "disabled" : ""}>${reversed ? "已冲正" : (movement.reversalOf ? "冲正记录" : "冲正")}</button>
+    `;
+    const reverseButton = row.querySelector("[data-reverse-cash]");
+    reverseButton.addEventListener("click", () => reverseCashMovement(movement.id));
+    els.cashMovementList.append(row);
+  }
+}
+
+function recordCashMovement(event) {
+  event.preventDefault();
+  if (!currentShift || currentShift.closedAt) return;
+  if (!canManageCurrentShift()) {
+    alert("当前账号无权修改这个班次的现金流水。");
+    return;
+  }
+  const type = els.cashMovementType.value === "out" ? "out" : "in";
+  const amount = Number(els.cashMovementAmount.value || 0);
+  const reason = els.cashMovementReason.value.trim();
+  if (!Number.isFinite(amount) || amount <= 0 || !reason) {
+    alert("请填写有效金额和原因。");
+    return;
+  }
+  seedLegacyCashMovements(currentShift);
+  const movement = {
+    id: `CASH-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    type,
+    amount: Number(amount.toFixed(2)),
+    reason,
+    createdAt: new Date().toISOString(),
+    actor: getCurrentActor()
+  };
+  currentShift.cashMovements.push(movement);
+  refreshCurrentShiftCashTotals();
+  writeAuditLog("shift.cash-movement", {
+    shiftId: currentShift.id,
+    movementId: movement.id,
+    type,
+    amount: movement.amount,
+    reason
+  });
+  els.cashMovementForm.reset();
+  renderCashMovementDialog();
+  renderOperatorAccess();
+}
+
+function reverseCashMovement(movementId) {
+  if (!currentShift || currentShift.closedAt) return;
+  if (!canManageCurrentShift()) {
+    alert("当前账号无权冲正这个班次的现金流水。");
+    return;
+  }
+  const movements = currentShift.cashMovements || [];
+  const movement = movements.find((item) => item.id === movementId);
+  if (!movement || movements.some((item) => item.reversalOf === movementId)) return;
+  if (!confirm(`确定冲正这笔${movement.type === "out" ? "现金取出" : "现金存入"} ${money(movement.amount)} 吗？`)) return;
+  const reversal = {
+    id: `CASH-REV-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    type: movement.type === "out" ? "in" : "out",
+    amount: Number(movement.amount),
+    reason: `冲正 ${movement.id}：${movement.reason || ""}`,
+    createdAt: new Date().toISOString(),
+    actor: getCurrentActor(),
+    reversalOf: movement.id
+  };
+  currentShift.cashMovements.push(reversal);
+  refreshCurrentShiftCashTotals();
+  writeAuditLog("shift.cash-movement.reverse", {
+    shiftId: currentShift.id,
+    movementId,
+    reversalId: reversal.id,
+    amount: reversal.amount
+  });
+  renderCashMovementDialog();
+}
+
+function updateSettlementDifference() {
   const summary = getShiftSummary(currentShift);
-  if (!confirm(`确定结束班次吗？本班 ${summary.orders} 单，共 ${money(summary.total)}。`)) return;
+  const openingCash = Math.max(0, Number(els.settlementOpeningCash.value || 0));
+  const cashIn = Math.max(0, Number(els.settlementCashIn.value || 0));
+  const cashOut = Math.max(0, Number(els.settlementCashOut.value || 0));
+  const expectedCash = openingCash + Number(summary.cashSales || 0) + cashIn - cashOut;
+  els.settlementExpectedCash.textContent = money(expectedCash);
+  const rawValue = els.settlementCountedCash.value;
+  if (rawValue === "") {
+    els.settlementCashDifference.textContent = "待输入";
+    els.settlementCashDifference.parentElement.classList.remove("negative");
+    els.settlementCashDifference.parentElement.classList.remove("mismatch");
+    return;
+  }
+  const difference = Number(rawValue || 0) - expectedCash;
+  els.settlementCashDifference.textContent = money(difference);
+  els.settlementCashDifference.parentElement.classList.toggle("negative", difference < 0);
+  els.settlementCashDifference.parentElement.classList.toggle("mismatch", difference !== 0);
+}
+
+function openShiftSettlement() {
+  if (!currentShift || currentShift.closedAt) return;
+  if (!canManageCurrentShift()) {
+    alert(`当前班次属于 ${getCurrentShiftLabel()}，只有原员工或管理员可以交班。`);
+    return;
+  }
+  const summary = getShiftSummary(currentShift);
+  els.settlementShiftInfo.textContent = `${currentShift.operatorName || "-"} · ${currentShift.branchName || getBranchName(currentShift.branchId)} · ${new Date(currentShift.openedAt).toLocaleString()} 开始`;
+  els.settlementOrders.textContent = String(summary.orders);
+  els.settlementTotal.textContent = money(summary.total);
+  els.settlementVoids.textContent = `${summary.voidedOrders} 单`;
+  els.settlementPaymentList.innerHTML = "";
+  if (!summary.payments.length) {
+    els.settlementPaymentList.innerHTML = '<div class="empty compact-empty">本班暂无有效订单</div>';
+  } else {
+    for (const payment of summary.payments) {
+      const row = document.createElement("div");
+      row.className = "management-row";
+      row.innerHTML = `
+        <div>
+          <strong>${escapeHtml(payment.method)}</strong>
+          <small>${payment.orders} 单</small>
+        </div>
+        <span>${money(payment.total)}</span>
+      `;
+      els.settlementPaymentList.append(row);
+    }
+  }
+  const warnings = [];
+  if (!navigator.onLine) warnings.push("当前离线，交班资料会保存在本机并等待同步。");
+  if (summary.pendingOrderSync) warnings.push(`本班有 ${summary.pendingOrderSync} 笔订单或更新等待同步。`);
+  if (summary.pendingSyncTotal > summary.pendingOrderSync) warnings.push(`本机另有 ${summary.pendingSyncTotal - summary.pendingOrderSync} 项库存或审计资料等待同步。`);
+  if (summary.simplePayPending) warnings.push(`${summary.simplePayPending} 笔 SimplePay 付款待确认。`);
+  if (summary.affiliatePending) warnings.push(`${summary.affiliatePending} 笔联盟订单待关联。`);
+  if (summary.voidedOrders) warnings.push(`${summary.voidedOrders} 笔作废订单，原金额 ${money(summary.voidedTotal)}。`);
+  els.settlementWarnings.innerHTML = warnings.length
+    ? warnings.map((warning) => `<div class="settlement-warning">${escapeHtml(warning)}</div>`).join("")
+    : '<div class="helper-text">未发现待同步、待关联或作废提醒。</div>';
+  els.settlementOpeningCash.value = Number(currentShift.openingCash || 0).toFixed(2);
+  els.settlementCashIn.value = Number(currentShift.cashIn || 0).toFixed(2);
+  els.settlementCashOut.value = Number(currentShift.cashOut || 0).toFixed(2);
+  els.settlementCountedCash.value = summary.expectedCash === 0 ? "0.00" : "";
+  els.settlementCountedCash.placeholder = summary.expectedCash.toFixed(2);
+  els.settlementNote.value = "";
+  updateSettlementDifference();
+  els.shiftSettlementDialog.showModal();
+}
+
+function closeShiftSettlementDialog() {
+  if (els.shiftSettlementDialog.open) els.shiftSettlementDialog.close();
+}
+
+function getSettlementReconciliation(shift = currentShift) {
+  const summary = getShiftSummary(shift);
+  const openingCash = Math.max(0, Number(els.settlementOpeningCash.value || 0));
+  const cashIn = Math.max(0, Number(els.settlementCashIn.value || 0));
+  const cashOut = Math.max(0, Number(els.settlementCashOut.value || 0));
+  const expectedCash = openingCash + Number(summary.cashSales || 0) + cashIn - cashOut;
+  const countedCash = Number(els.settlementCountedCash.value || 0);
+  return {
+    cashSales: summary.cashSales,
+    openingCash,
+    cashIn,
+    cashOut,
+    expectedCash,
+    countedCash,
+    cashDifference: Number((countedCash - expectedCash).toFixed(2)),
+    voidedOrders: summary.voidedOrders,
+    voidedTotal: summary.voidedTotal,
+    pendingOrderSync: summary.pendingOrderSync,
+    pendingSyncTotal: summary.pendingSyncTotal,
+    simplePayPending: summary.simplePayPending,
+    affiliatePending: summary.affiliatePending,
+    note: els.settlementNote.value.trim(),
+    reconciledAt: new Date().toISOString(),
+    reconciledBy: getCurrentActor()
+  };
+}
+
+function confirmShiftSettlement(event) {
+  event.preventDefault();
+  if (!currentShift || currentShift.closedAt) {
+    closeShiftSettlementDialog();
+    return;
+  }
+  if (!canManageCurrentShift()) {
+    closeShiftSettlementDialog();
+    alert("当前账号无权结束这个班次。");
+    return;
+  }
+  if (els.settlementCountedCash.value === "") {
+    alert("请填写现金实点金额。");
+    els.settlementCountedCash.focus();
+    return;
+  }
+  const summary = getShiftSummary(currentShift);
+  const reconciliation = getSettlementReconciliation(currentShift);
+  if (reconciliation.expectedCash < 0) {
+    alert("现金取出不能大于备用金、现金销售和现金存入的合计。");
+    els.settlementCashOut.focus();
+    return;
+  }
+  if (reconciliation.cashDifference !== 0 && !reconciliation.note) {
+    alert("现金有差额时必须填写交班备注。");
+    els.settlementNote.focus();
+    return;
+  }
+  const hasWarnings = reconciliation.cashDifference !== 0
+    || reconciliation.pendingSyncTotal > 0
+    || reconciliation.simplePayPending > 0
+    || reconciliation.affiliatePending > 0;
+  if (hasWarnings && !confirm("当前结算仍有差额或待处理项目，确定保存并结束班次吗？")) return;
   const closedShift = {
     ...currentShift,
+    openingCash: reconciliation.openingCash,
+    cashIn: reconciliation.cashIn,
+    cashOut: reconciliation.cashOut,
     closedAt: new Date().toISOString(),
-    summary
+    closedBy: getCurrentActor(),
+    summary: {
+      ...summary,
+      openingCash: reconciliation.openingCash,
+      cashIn: reconciliation.cashIn,
+      cashOut: reconciliation.cashOut,
+      expectedCash: reconciliation.expectedCash
+    },
+    reconciliation
   };
   shifts.unshift(closedShift);
   shifts = shifts.slice(0, 100);
   currentShift = null;
+  els.shiftOpeningCashInput.value = "0.00";
   saveShifts();
   saveCurrentShift();
+  closeShiftSettlementDialog();
   writeAuditLog("shift.close", {
     shiftId: closedShift.id,
     orders: summary.orders,
-    total: summary.total
+    total: summary.total,
+    cashDifference: reconciliation.cashDifference,
+    pendingSyncTotal: reconciliation.pendingSyncTotal,
+    closedBy: closedShift.closedBy?.email || ""
   });
   alert("班次已结束，交班记录已保存。");
   renderAll();
+}
+
+function buildShiftSettlementRows(shift, reconciliation = shift?.reconciliation) {
+  const calculatedSummary = getShiftSummary(shift);
+  const summary = { ...calculatedSummary, ...(shift?.summary || {}) };
+  const rows = [
+    ["班次结算"],
+    ["班次号", shift?.id || ""],
+    ["分行", shift?.branchName || getBranchName(shift?.branchId || "hq")],
+    ["操作员", shift?.operatorName || ""],
+    ["核对 / 结班人", reconciliation?.reconciledBy?.name || shift?.closedBy?.name || "", reconciliation?.reconciledBy?.email || shift?.closedBy?.email || ""],
+    ["开始时间", shift?.openedAt ? new Date(shift.openedAt).toLocaleString() : ""],
+    ["结束时间", shift?.closedAt ? new Date(shift.closedAt).toLocaleString() : "尚未结束"],
+    ["有效订单", summary.orders || 0],
+    ["销售总额", summary.total || 0],
+    ["作废订单", summary.voidedOrders || 0],
+    ["作废原金额", summary.voidedTotal || 0],
+    [],
+    ["付款方式", "订单数", "金额"]
+  ];
+  for (const payment of summary.payments || []) {
+    rows.push([payment.method, payment.orders, payment.total]);
+  }
+  rows.push(
+    [],
+    ["现金核对"],
+    ["开班备用金", reconciliation?.openingCash ?? summary.openingCash ?? 0],
+    ["现金销售", reconciliation?.cashSales ?? summary.cashSales ?? 0],
+    ["其他现金存入", reconciliation?.cashIn ?? summary.cashIn ?? 0],
+    ["现金取出 / 支出", reconciliation?.cashOut ?? summary.cashOut ?? 0],
+    ["应有现金", reconciliation?.expectedCash ?? summary.expectedCash ?? 0],
+    ["实点现金", reconciliation?.countedCash ?? els.settlementCountedCash.value ?? ""],
+    ["现金差额", reconciliation?.cashDifference ?? ""],
+    ["交班备注", reconciliation?.note || els.settlementNote.value.trim() || ""]
+  );
+  const cashMovements = Array.isArray(shift?.cashMovements) ? shift.cashMovements : [];
+  rows.push([], ["现金流水", "时间", "金额", "原因", "操作员", "流水号", "冲正原流水"]);
+  if (!cashMovements.length) {
+    rows.push(["无逐笔现金流水"]);
+  } else {
+    for (const movement of cashMovements) {
+      rows.push([
+        movement.type === "out" ? "现金取出" : "现金存入",
+        movement.createdAt ? new Date(movement.createdAt).toLocaleString() : "",
+        movement.amount || 0,
+        movement.reason || "",
+        movement.actor?.name || movement.actor?.email || "",
+        movement.id || "",
+        movement.reversalOf || ""
+      ]);
+    }
+  }
+  rows.push(
+    [],
+    ["风险提醒"],
+    ["本班待同步订单", reconciliation?.pendingOrderSync ?? summary.pendingOrderSync ?? 0],
+    ["本机全部待同步", reconciliation?.pendingSyncTotal ?? summary.pendingSyncTotal ?? 0],
+    ["SimplePay 待确认", reconciliation?.simplePayPending ?? summary.simplePayPending ?? 0],
+    ["联盟待关联", reconciliation?.affiliatePending ?? summary.affiliatePending ?? 0]
+  );
+  return rows;
+}
+
+function exportCurrentShiftSettlement(shift = currentShift) {
+  if (!shift) {
+    alert("没有可导出的班次。");
+    return;
+  }
+  const calculatedSummary = getShiftSummary(shift);
+  const summary = { ...calculatedSummary, ...(shift.summary || {}) };
+  let reconciliation = shift.reconciliation;
+  if (!reconciliation && shift === currentShift) {
+    const hasCountedCash = els.settlementCountedCash.value !== "";
+    const countedCash = hasCountedCash ? Number(els.settlementCountedCash.value || 0) : "";
+    const openingCash = Math.max(0, Number(els.settlementOpeningCash.value || 0));
+    const cashIn = Math.max(0, Number(els.settlementCashIn.value || 0));
+    const cashOut = Math.max(0, Number(els.settlementCashOut.value || 0));
+    const expectedCash = openingCash + Number(summary.cashSales || 0) + cashIn - cashOut;
+    reconciliation = {
+      cashSales: summary.cashSales || 0,
+      openingCash,
+      cashIn,
+      cashOut,
+      expectedCash,
+      countedCash,
+      cashDifference: hasCountedCash ? Number((countedCash - expectedCash).toFixed(2)) : "",
+      voidedOrders: summary.voidedOrders || 0,
+      voidedTotal: summary.voidedTotal || 0,
+      pendingOrderSync: summary.pendingOrderSync || 0,
+      pendingSyncTotal: summary.pendingSyncTotal || 0,
+      simplePayPending: summary.simplePayPending || 0,
+      affiliatePending: summary.affiliatePending || 0,
+      note: els.settlementNote.value.trim()
+    };
+  }
+  if (!reconciliation) {
+    reconciliation = {
+      cashSales: summary.cashSales || 0,
+      openingCash: summary.openingCash || 0,
+      cashIn: summary.cashIn || 0,
+      cashOut: summary.cashOut || 0,
+      expectedCash: summary.expectedCash || 0,
+      countedCash: "",
+      cashDifference: "",
+      voidedOrders: summary.voidedOrders || 0,
+      voidedTotal: summary.voidedTotal || 0,
+      pendingOrderSync: summary.pendingOrderSync || 0,
+      pendingSyncTotal: summary.pendingSyncTotal || 0,
+      simplePayPending: summary.simplePayPending || 0,
+      affiliatePending: summary.affiliatePending || 0,
+      note: "旧版交班记录，未保存现金实点"
+    };
+  }
+  downloadCsv(`shift-settlement-${shift.id}.csv`, buildShiftSettlementRows(shift, reconciliation));
 }
 
 function renderOperatorAccess() {
   const operator = getActiveCashier();
   const posOperator = getOperator();
   const allowed = isOperatorAllowedForCurrentBranch();
-  els.operatorStatus.textContent = allowed
+  const shiftLocked = hasOpenShift() && !isCurrentShiftOwner();
+  els.operatorStatus.textContent = shiftLocked
+    ? "班次待交接"
+    : allowed
     ? `收银：${operator.name}`
     : posOperator
       ? "收银分行不匹配"
       : "POS未登录";
-  els.operatorStatus.style.color = allowed ? "#0f766e" : "#66756f";
-  els.cashierOperatorText.textContent = allowed
+  els.operatorStatus.style.color = allowed && !shiftLocked ? "#0f766e" : "#66756f";
+  els.cashierOperatorText.textContent = shiftLocked
+    ? getCurrentShiftLabel()
+    : allowed
     ? `${operator.name} · ${getBranchName(operator.branchId)}`
     : posOperator
       ? `${posOperator.name} · 分行不匹配`
       : "未登录";
-  els.quickCheckoutBtn.textContent = allowed ? (cart.length ? "结算当前订单" : "开始收银") : "员工登录";
+  els.quickCheckoutBtn.textContent = shiftLocked
+    ? "先完成交班"
+    : allowed
+    ? (cart.length ? "结算当前订单" : (currentShift && !currentShift.closedAt ? "继续收银" : "开始收银"))
+    : "员工登录";
   els.shiftStatusText.textContent = currentShift && !currentShift.closedAt
-    ? `班次：${new Date(currentShift.openedAt).toLocaleString()} 开始`
+    ? `班次：${getCurrentShiftLabel()} · ${new Date(currentShift.openedAt).toLocaleString()} 开始 · 备用金 ${money(currentShift.openingCash || 0)}`
     : "未开班";
-  els.closeShiftBtn.disabled = !currentShift || Boolean(currentShift.closedAt);
+  els.shiftOpeningCashPanel.classList.toggle("hidden", Boolean(currentShift && !currentShift.closedAt));
+  els.closeShiftBtn.disabled = !canManageCurrentShift();
+  els.cashMovementBtn.disabled = !canManageCurrentShift();
   els.operatorLogoutBtn.classList.toggle("hidden", !posOperator);
-  els.operatorMessage.classList.toggle("error", Boolean(posOperator && !allowed));
-  if (isAdmin()) {
+  els.operatorMessage.classList.toggle("error", shiftLocked || Boolean(posOperator && !allowed));
+  if (shiftLocked && isAdmin()) {
+    els.operatorMessage.textContent = `当前班次属于 ${getCurrentShiftLabel()}。管理员可查看并完成交班，结班前不能切换分行或开始新销售。`;
+  } else if (shiftLocked) {
+    els.operatorMessage.textContent = `当前班次属于 ${getCurrentShiftLabel()}。请由原员工重新登录恢复，或请管理员完成交班。`;
+  } else if (isAdmin()) {
     els.operatorMessage.textContent = `${operator.name} 拥有全局权限，可切换总店与所有分行。`;
   } else if (allowed) {
-    els.operatorMessage.textContent = `${operator.name} 已授权使用 ${getBranchName(operator.branchId)} POS，分行已锁定。`;
+    els.operatorMessage.textContent = hasOpenShift()
+      ? `${operator.name} 已恢复 ${getBranchName(operator.branchId)} 的进行中班次。`
+      : `${operator.name} 已授权使用 ${getBranchName(operator.branchId)} POS，分行已锁定。`;
   } else if (posOperator) {
     els.operatorMessage.textContent = `${posOperator.name} 只被授权使用 ${getBranchName(posOperator.branchId)}，系统已锁定该分行。`;
   } else {
@@ -890,6 +1451,11 @@ async function loginOperator(event) {
     els.operatorPasswordInput.focus();
     return;
   }
+  if (hasOpenShift() && !isShiftIdentity(user.email, user.branchId)) {
+    els.operatorMessage.textContent = `当前班次属于 ${getCurrentShiftLabel()}，不能改由其他员工接手。请原员工登录，或请管理员交班。`;
+    els.operatorMessage.classList.add("error");
+    return;
+  }
   operatorEmail = user.email;
   currentBranchId = user.branchId;
   localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
@@ -897,7 +1463,7 @@ async function loginOperator(event) {
   els.operatorEmailInput.value = "";
   els.operatorPasswordInput.value = "";
   cart = [];
-  ensureCurrentShift();
+  if (!ensureCurrentShift()) return;
   renderAll();
 }
 
@@ -908,7 +1474,7 @@ function logoutCloudIfReady() {
 }
 
 function logoutOperator() {
-  if (currentShift && !currentShift.closedAt && !confirm("当前班次尚未结束，确定退出收银吗？")) return;
+  if (currentShift && !currentShift.closedAt && !confirm("当前班次尚未结束。退出后班次会保留，只有原员工重新登录或管理员交班后才能继续。确定退出吗？")) return;
   operatorEmail = "";
   localStorage.removeItem(STORAGE_KEYS.operatorEmail);
   logoutCloudIfReady();
@@ -1224,6 +1790,14 @@ function applyCloudUser(appUser) {
     return;
   }
 
+  const targetBranchId = appUser.role === "admin" ? currentBranchId : (appUser.branchId || "hq");
+  if (appUser.role !== "admin" && hasOpenShift() && !isShiftIdentity(appUser.email, targetBranchId)) {
+    updateCloudStatus("当前设备仍有其他员工的进行中班次");
+    alert(`当前班次属于 ${getCurrentShiftLabel()}，不能改由其他员工接手。请原员工登录，或请管理员交班。`);
+    logoutCloudIfReady();
+    return;
+  }
+
   cloudSessionActive = true;
   currentCloudUser = appUser;
   if (!authorizedUsers.some((user) => normalizeEmail(user.email) === normalizeEmail(appUser.email))) {
@@ -1249,7 +1823,7 @@ function applyCloudUser(appUser) {
   operatorEmail = appUser.email;
   localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
-  ensureCurrentShift();
+  if (!hasOpenShift() || isShiftIdentity(appUser.email, currentBranchId)) ensureCurrentShift();
   updateCloudStatus(`云端已登录：${appUser.email}`, true);
   loadCloudData();
   syncPendingChanges();
@@ -1379,13 +1953,18 @@ function renderManagementLists() {
     for (const shift of shifts.slice(0, 10)) {
       const row = document.createElement("div");
       row.className = "management-row";
+      const cashDifference = shift.reconciliation?.cashDifference;
       row.innerHTML = `
         <div>
           <strong>${escapeHtml(shift.operatorName || "-")} · ${escapeHtml(shift.branchName || "-")}</strong>
           <small>${new Date(shift.openedAt).toLocaleString()} 至 ${shift.closedAt ? new Date(shift.closedAt).toLocaleString() : "-"}</small>
         </div>
-        <small>${shift.summary?.orders || 0} 单 · ${money(shift.summary?.total || 0)}</small>
+        <div class="row-actions">
+          <small>${shift.summary?.orders || 0} 单 · ${money(shift.summary?.total || 0)}${cashDifference === undefined ? "" : ` · 现金差额 ${money(cashDifference)}`}</small>
+          <button class="ghost" type="button" data-export-shift>导出结算</button>
+        </div>
       `;
+      row.querySelector("[data-export-shift]").addEventListener("click", () => exportCurrentShiftSettlement(shift));
       els.shiftList.append(row);
     }
   }
@@ -1653,6 +2232,7 @@ function renderAll() {
   }
   renderBranchSelect();
   renderInventoryBranchFilter();
+  renderSalesBranchFilter();
   renderCategoryFilter();
   renderProducts();
   renderCart();
@@ -1689,6 +2269,36 @@ function renderInventoryBranchFilter() {
     : (branches[0]?.id || "hq");
   els.inventoryBranchFilter.disabled = !isAdmin();
   els.inventoryBranchFilter.title = isAdmin() ? "管理员可查看所有分行库存" : "员工只能处理授权分行库存";
+}
+
+function renderSalesBranchFilter() {
+  if (!els.salesBranchFilter) return;
+  const operatorBranchId = getOperator()?.branchId || currentBranchId || "hq";
+  const previousValue = els.salesBranchFilter.value;
+  els.salesBranchFilter.innerHTML = "";
+  if (isAdmin()) {
+    const allOption = document.createElement("option");
+    allOption.value = "all";
+    allOption.textContent = "全部分行";
+    els.salesBranchFilter.append(allOption);
+    for (const branch of branches) {
+      const option = document.createElement("option");
+      option.value = branch.id;
+      option.textContent = branch.name;
+      els.salesBranchFilter.append(option);
+    }
+    els.salesBranchFilter.value = previousValue === "all" || branches.some((branch) => branch.id === previousValue)
+      ? previousValue
+      : "all";
+    els.salesBranchFilter.disabled = false;
+    return;
+  }
+  const option = document.createElement("option");
+  option.value = operatorBranchId;
+  option.textContent = getBranchName(operatorBranchId);
+  els.salesBranchFilter.append(option);
+  els.salesBranchFilter.value = operatorBranchId;
+  els.salesBranchFilter.disabled = true;
 }
 
 function renderMenuProductList() {
@@ -2035,6 +2645,31 @@ function runLocalDiagnostics() {
     orphanUpdates.length
       ? `${orphanUpdates.length} 个订单更新找不到本机订单`
       : (pendingCount ? `共有 ${pendingCount} 项等待网络同步` : "没有待同步资料")
+  );
+
+  const allShifts = [currentShift, ...shifts].filter(Boolean);
+  const cashMovements = allShifts.flatMap((shift) =>
+    (Array.isArray(shift.cashMovements) ? shift.cashMovements : []).map((movement) => ({
+      ...movement,
+      shiftId: shift.id
+    }))
+  );
+  const duplicateMovementIds = duplicateValues(cashMovements, (movement) => movement.id);
+  const movementIds = new Set(cashMovements.map((movement) => movement.id));
+  const invalidMovements = cashMovements.filter((movement) =>
+    !movement.id
+    || !["in", "out"].includes(movement.type)
+    || !Number.isFinite(Number(movement.amount))
+    || Number(movement.amount) <= 0
+    || !movement.reason
+    || (movement.reversalOf && !movementIds.has(movement.reversalOf))
+  );
+  addCheck(
+    "现金流水",
+    duplicateMovementIds.length || invalidMovements.length ? "error" : "pass",
+    duplicateMovementIds.length
+      ? `重复流水 ID：${duplicateMovementIds.join(", ")}`
+      : (invalidMovements.length ? `${invalidMovements.length} 笔现金流水结构异常` : `${cashMovements.length} 笔逐笔现金流水正常`)
   );
 
   const errors = checks.filter((check) => check.level === "error").length;
@@ -2662,6 +3297,7 @@ function updatePaymentPreview() {
 function openPaymentDialog() {
   if (!cart.length) return;
   if (!requireOperator()) return;
+  if (!ensureCurrentShift()) return;
   autoFillPaid = true;
   els.customPaidPanel.classList.add("hidden");
   renderCart();
@@ -2684,7 +3320,7 @@ async function checkout() {
     els.paymentReferenceInput.focus();
     return;
   }
-  ensureCurrentShift();
+  if (!ensureCurrentShift()) return;
   const cashier = getActiveCashier();
 
   const createdAt = new Date();
@@ -2932,6 +3568,7 @@ function renderSales() {
   if (!showAllSalesDates && !els.salesDateInput.value) els.salesDateInput.value = inputDate();
   const selectedDate = els.salesDateInput.value;
   const keyword = els.salesSearchInput.value.trim().toLowerCase();
+  const branchFilter = els.salesBranchFilter.value || (isAdmin() ? "all" : getOperationalBranchId());
   const paymentFilter = els.salesPaymentFilter.value;
   const integrationFilter = els.salesIntegrationFilter.value;
   const integrationIssues = getIntegrationIssues(
@@ -2940,6 +3577,7 @@ function renderSales() {
   const integrationIssueSaleIds = new Set(integrationIssues.flatMap((issue) => issue.saleIds));
   const selectedSales = sales.filter((sale) => {
     if (!canManageBranch(sale.branchId || "hq")) return false;
+    if (branchFilter !== "all" && (sale.branchId || "hq") !== branchFilter) return false;
     const matchDate = showAllSalesDates || inputDate(new Date(sale.createdAt)) === selectedDate;
     if (!matchDate) return false;
     if (paymentFilter !== "all" && (sale.payment?.method || "现金") !== paymentFilter) return false;
@@ -3007,9 +3645,10 @@ function renderSales() {
 
 function renderDailyPaymentSummary(selectedSales) {
   const activeSelectedSales = getActiveSales(selectedSales);
+  const voidedSelectedSales = selectedSales.filter(isSaleVoided);
   const paymentRows = getPaymentSummaryRows(activeSelectedSales);
   els.dailyPaymentSummaryList.innerHTML = "";
-  if (!paymentRows.length) {
+  if (!paymentRows.length && !voidedSelectedSales.length) {
     els.dailyPaymentSummaryList.innerHTML = '<div class="empty compact-empty">当前筛选没有结算资料</div>';
     return;
   }
@@ -3022,6 +3661,33 @@ function renderDailyPaymentSummary(selectedSales) {
         <small>${item.orders} 单</small>
       </div>
       <small>${money(item.total)}</small>
+    `;
+    els.dailyPaymentSummaryList.append(row);
+  }
+  const visibleIds = new Set(selectedSales.map((sale) => sale.id));
+  const pendingOrderCount = new Set(
+    [...pendingSales, ...pendingSaleUpdates]
+      .filter((sale) => visibleIds.has(sale.id))
+      .map((sale) => sale.id)
+  ).size;
+  const references = activeSelectedSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
+  const simplePayPending = references.filter((item) => item.simplePayStatus === "pending").length;
+  const affiliatePending = references.filter((item) => item.affiliateStatus === "pending").length;
+  const alerts = [
+    voidedSelectedSales.length ? `作废 ${voidedSelectedSales.length} 单（原金额 ${money(voidedSelectedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0))}）` : "",
+    pendingOrderCount ? `待同步 ${pendingOrderCount} 单` : "",
+    simplePayPending ? `SimplePay 待确认 ${simplePayPending} 单` : "",
+    affiliatePending ? `联盟待关联 ${affiliatePending} 单` : ""
+  ].filter(Boolean);
+  if (alerts.length) {
+    const row = document.createElement("div");
+    row.className = "management-row diagnostic-warning";
+    row.innerHTML = `
+      <div>
+        <strong>对账提醒</strong>
+        <small>${escapeHtml(alerts.join(" · "))}</small>
+      </div>
+      <span>待处理</span>
     `;
     els.dailyPaymentSummaryList.append(row);
   }
@@ -3274,15 +3940,33 @@ function exportPaymentSummary() {
 function exportDailySettlement() {
   if (!requireAdmin()) return;
   const selectedDate = els.salesDateInput.value || inputDate();
+  const branchFilter = els.salesBranchFilter.value || "all";
   const paymentFilter = els.salesPaymentFilter.value;
-  const selectedSales = sales.filter((sale) => {
+  const dateSales = sales.filter((sale) => {
+    if (!canManageBranch(sale.branchId || "hq")) return false;
+    if (branchFilter !== "all" && (sale.branchId || "hq") !== branchFilter) return false;
     const matchDate = inputDate(new Date(sale.createdAt)) === selectedDate;
-    if (!matchDate || isSaleVoided(sale)) return false;
+    if (!matchDate) return false;
     return paymentFilter === "all" || (sale.payment?.method || "现金") === paymentFilter;
   });
-  const rows = [["类型", "日期", "付款筛选", "付款方式", "订单数", "金额", "订单号", "时间", "参考号", "客户"]];
+  if (!dateSales.length) {
+    alert("当前筛选没有结算资料。");
+    return;
+  }
+  const selectedSales = getActiveSales(dateSales);
+  const voidedSales = dateSales.filter(isSaleVoided);
+  const selectedIds = new Set(dateSales.map((sale) => sale.id));
+  const pendingOrderIds = new Set(
+    [...pendingSales, ...pendingSaleUpdates]
+      .filter((sale) => selectedIds.has(sale.id))
+      .map((sale) => sale.id)
+  );
+  const externalReferences = selectedSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
+  const simplePayPending = externalReferences.filter((item) => item.simplePayStatus === "pending").length;
+  const affiliatePending = externalReferences.filter((item) => item.affiliateStatus === "pending").length;
+  const rows = [["类型", "日期", "付款筛选", "付款方式", "订单数", "有效金额", "订单号", "状态", "时间", "参考号", "客户", "分行", "同步", "外部关联"]];
   for (const item of getPaymentSummaryRows(selectedSales)) {
-    rows.push(["汇总", selectedDate, paymentFilter === "all" ? "全部付款" : paymentFilter, item.method, item.orders, item.total, "", "", "", ""]);
+    rows.push(["付款汇总", selectedDate, paymentFilter === "all" ? "全部付款" : paymentFilter, item.method, item.orders, item.total, "", "", "", "", "", "", "", ""]);
   }
   for (const sale of selectedSales) {
     rows.push([
@@ -3293,16 +3977,41 @@ function exportDailySettlement() {
       "",
       sale.total,
       sale.id,
+      "正常",
       new Date(sale.createdAt).toLocaleString(),
       sale.payment?.reference || "",
-      `${sale.customer?.name || ""} ${sale.customer?.phone || ""}`.trim()
+      `${sale.customer?.name || ""} ${sale.customer?.phone || ""}`.trim(),
+      sale.branchName || getBranchName(sale.branchId || "hq"),
+      getSaleSyncText(sale),
+      getSaleIntegrationSummary(sale)
     ]);
   }
-  if (rows.length === 1) {
-    alert("当前筛选没有结算资料。");
-    return;
+  for (const sale of voidedSales) {
+    rows.push([
+      "作废",
+      selectedDate,
+      paymentFilter === "all" ? "全部付款" : paymentFilter,
+      sale.payment?.method || "现金",
+      "",
+      0,
+      sale.id,
+      `已作废，原金额 ${money(sale.total)}`,
+      new Date(sale.createdAt).toLocaleString(),
+      sale.payment?.reference || "",
+      `${sale.customer?.name || ""} ${sale.customer?.phone || ""}`.trim(),
+      sale.branchName || getBranchName(sale.branchId || "hq"),
+      getSaleSyncText(sale),
+      getSaleIntegrationSummary(sale)
+    ]);
   }
-  downloadCsv(`daily-settlement-${selectedDate}.csv`, rows);
+  rows.push(
+    ["风险汇总", selectedDate, "", "", pendingOrderIds.size, "", "", "待同步订单", "", "", "", "", "", ""],
+    ["风险汇总", selectedDate, "", "", simplePayPending, "", "", "SimplePay 待确认", "", "", "", "", "", ""],
+    ["风险汇总", selectedDate, "", "", affiliatePending, "", "", "联盟待关联", "", "", "", "", "", ""],
+    ["风险汇总", selectedDate, "", "", voidedSales.length, 0, "", `作废原金额 ${money(voidedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0))}`, "", "", "", "", "", ""]
+  );
+  const branchSuffix = branchFilter === "all" ? "all-branches" : branchFilter;
+  downloadCsv(`daily-settlement-${selectedDate}-${branchSuffix}.csv`, rows);
 }
 
 function exportIntegrationQueue() {
@@ -3475,17 +4184,32 @@ function exportShifts() {
     alert("还没有交班记录可以导出。");
     return;
   }
-  const rows = [["班次号", "分行", "操作员", "开始时间", "结束时间", "订单数", "总金额", "付款汇总"]];
+  const rows = [["班次号", "分行", "操作员", "核对 / 结班人", "结班人邮箱", "开始时间", "结束时间", "订单数", "总金额", "付款汇总", "开班备用金", "现金销售", "其他现金存入", "现金取出", "应有现金", "实点现金", "现金差额", "作废订单", "本机待同步", "SimplePay待确认", "联盟待关联", "交班备注"]];
   for (const shift of shifts) {
+    const reconciledBy = shift.reconciliation?.reconciledBy || shift.closedBy || {};
     rows.push([
       shift.id,
       shift.branchName || getBranchName(shift.branchId || "hq"),
       shift.operatorName || "",
+      reconciledBy.name || "",
+      reconciledBy.email || "",
       shift.openedAt ? new Date(shift.openedAt).toLocaleString() : "",
       shift.closedAt ? new Date(shift.closedAt).toLocaleString() : "",
       shift.summary?.orders || 0,
       shift.summary?.total || 0,
-      (shift.summary?.payments || []).map((item) => `${item.method}: ${money(item.total)} (${item.orders}单)`).join("; ")
+      (shift.summary?.payments || []).map((item) => `${item.method}: ${money(item.total)} (${item.orders}单)`).join("; "),
+      shift.reconciliation?.openingCash ?? shift.openingCash ?? "",
+      shift.reconciliation?.cashSales ?? shift.summary?.cashSales ?? "",
+      shift.reconciliation?.cashIn ?? shift.cashIn ?? "",
+      shift.reconciliation?.cashOut ?? shift.cashOut ?? "",
+      shift.reconciliation?.expectedCash ?? "",
+      shift.reconciliation?.countedCash ?? "",
+      shift.reconciliation?.cashDifference ?? "",
+      shift.reconciliation?.voidedOrders ?? shift.summary?.voidedOrders ?? "",
+      shift.reconciliation?.pendingSyncTotal ?? "",
+      shift.reconciliation?.simplePayPending ?? "",
+      shift.reconciliation?.affiliatePending ?? "",
+      shift.reconciliation?.note || ""
     ]);
   }
   downloadCsv(`shifts-${new Date().toISOString().slice(0, 10)}.csv`, rows);
@@ -3676,6 +4400,13 @@ for (const button of document.querySelectorAll("[data-app-view]")) {
   button.addEventListener("click", () => setAppView(button.dataset.appView));
 }
 els.branchSelect.addEventListener("change", () => {
+  if (hasOpenShift()) {
+    currentBranchId = currentShift.branchId;
+    localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+    alert(`当前班次属于 ${getCurrentShiftLabel()}，请先完成交班再切换分行。`);
+    renderAll();
+    return;
+  }
   if (isBranchLockedToOperator()) {
     const operator = getOperator();
     currentBranchId = operator.branchId;
@@ -3692,6 +4423,18 @@ els.operatorLoginForm.addEventListener("submit", loginOperator);
 els.googleLoginBtn.addEventListener("click", signInWithGoogle);
 els.operatorLogoutBtn.addEventListener("click", logoutOperator);
 els.closeShiftBtn.addEventListener("click", closeCurrentShift);
+els.cashMovementBtn.addEventListener("click", () => openCashMovementDialog(false));
+els.cashMovementForm.addEventListener("submit", recordCashMovement);
+els.closeCashMovementBtn.addEventListener("click", closeCashMovementDialog);
+els.cashMovementDialog.addEventListener("close", handleCashMovementDialogClosed);
+els.shiftSettlementForm.addEventListener("submit", confirmShiftSettlement);
+els.closeSettlementBtn.addEventListener("click", closeShiftSettlementDialog);
+els.settlementCashMovementBtn.addEventListener("click", () => openCashMovementDialog(true));
+els.settlementCountedCash.addEventListener("input", updateSettlementDifference);
+els.settlementOpeningCash.addEventListener("input", updateSettlementDifference);
+els.settlementCashIn.addEventListener("input", updateSettlementDifference);
+els.settlementCashOut.addEventListener("input", updateSettlementDifference);
+els.exportCurrentSettlementBtn.addEventListener("click", () => exportCurrentShiftSettlement());
 els.clearCartBtn.addEventListener("click", () => {
   cart = [];
   autoFillPaid = true;
@@ -3739,6 +4482,7 @@ els.salesDateInput.addEventListener("change", () => {
   renderSales();
 });
 els.salesSearchInput.addEventListener("input", renderSales);
+els.salesBranchFilter.addEventListener("change", renderSales);
 els.salesPaymentFilter.addEventListener("change", renderSales);
 els.salesIntegrationFilter.addEventListener("change", renderSales);
 els.exportDailySettlementBtn.addEventListener("click", exportDailySettlement);
@@ -3769,6 +4513,8 @@ els.quickCheckoutBtn.addEventListener("click", () => {
   } else if (cart.length) {
     openPaymentDialog();
   } else {
+    if (!ensureCurrentShift()) return;
+    renderAll();
     els.searchInput.focus();
   }
 });
