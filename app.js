@@ -21,7 +21,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.57";
+const APP_VERSION = "v0.58";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -154,6 +154,7 @@ const els = {
   operatorMessage: document.querySelector("#operatorMessage"),
   customerNameInput: document.querySelector("#customerNameInput"),
   customerPhoneInput: document.querySelector("#customerPhoneInput"),
+  affiliateReferralCodeInput: document.querySelector("#affiliateReferralCodeInput"),
   discountInput: document.querySelector("#discountInput"),
   customPaidPanel: document.querySelector("#customPaidPanel"),
   paidInput: document.querySelector("#paidInput"),
@@ -2200,8 +2201,10 @@ async function checkout() {
   const serviceEnd = new Date(createdAt);
   serviceEnd.setDate(serviceEnd.getDate() + Number(appSettings.serviceDays || 21));
 
+  const saleId = `POS${Date.now()}`;
+  const affiliateReferralCode = els.affiliateReferralCodeInput.value.trim().toUpperCase();
   const sale = {
-    id: `POS${Date.now()}`,
+    id: saleId,
     createdAt: createdAt.toISOString(),
     branchId: currentBranchId,
     branchName: getBranchName(currentBranchId),
@@ -2209,7 +2212,8 @@ async function checkout() {
     shiftId: currentShift?.id || "",
     customer: {
       name: els.customerNameInput.value.trim(),
-      phone: els.customerPhoneInput.value.trim()
+      phone: els.customerPhoneInput.value.trim(),
+      referralCode: affiliateReferralCode
     },
     service: {
       name: appSettings.defaultServiceName,
@@ -2227,6 +2231,12 @@ async function checkout() {
       method: paymentMethod,
       reference: paymentReference
     },
+    externalReferences: {
+      posOrderId: saleId,
+      simplePayReference: paymentMethod === "简单支付 / SimplePay" ? paymentReference : "",
+      affiliateReferralCode,
+      affiliateOrderId: ""
+    },
     syncStatus: navigator.onLine && hasCloud() ? "queued" : "pending"
   };
 
@@ -2242,6 +2252,7 @@ async function checkout() {
   cart = [];
   els.customerNameInput.value = "";
   els.customerPhoneInput.value = "";
+  els.affiliateReferralCodeInput.value = "";
   els.discountInput.value = "0";
   els.paidInput.value = "";
   els.paymentReferenceInput.value = "";
@@ -2281,6 +2292,7 @@ function buildReceipt(sale) {
     `计划周期：${formatDate(new Date(sale.service.startDate))} 至 ${formatDate(new Date(sale.service.endDate))}`,
     "------------------------------"
   ];
+  if (sale.customer?.referralCode) lines.splice(7, 0, `推荐码：${sale.customer.referralCode}`);
   for (const item of sale.items) {
     lines.push(`${item.name} x${item.qty}  ${money(item.price * item.qty)}`);
   }
@@ -2434,6 +2446,7 @@ function renderSales() {
       sale.id,
       sale.customer?.name,
       sale.customer?.phone,
+      sale.customer?.referralCode,
       sale.branchName,
       sale.operator?.name,
       ...(sale.items || []).map((item) => item.name)
@@ -2473,6 +2486,7 @@ function renderSales() {
       <span class="product-meta">同步：${getSaleSyncText(sale)}</span>
       <span class="product-meta">付款：${escapeHtml(sale.payment?.method || "现金")}${sale.payment?.reference ? ` · ${escapeHtml(sale.payment.reference)}` : ""}</span>
       <span class="product-meta">客户：${escapeHtml(sale.customer?.name || "-")} ${escapeHtml(sale.customer?.phone || "")}</span>
+      ${sale.customer?.referralCode ? `<span class="product-meta">联盟推荐码：${escapeHtml(sale.customer.referralCode)}</span>` : ""}
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
       ${canVoidSale(sale) ? '<button class="ghost danger" type="button" data-void-sale>退款 / 作废并回补库存</button>' : ""}
     `;
@@ -2661,10 +2675,11 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "班次号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "付款方式", "付款参考号", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "外部订单号", "班次号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "联盟推荐码", "付款方式", "付款参考号", "SimplePay参考号", "联盟订单号", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
+      sale.externalReferences?.posOrderId || sale.id,
       sale.shiftId || "",
       getSaleStatusText(sale),
       sale.voidedAt ? new Date(sale.voidedAt).toLocaleString() : "",
@@ -2675,8 +2690,11 @@ function exportSales() {
       new Date(sale.createdAt).toLocaleString(),
       sale.customer?.name || "",
       sale.customer?.phone || "",
+      sale.customer?.referralCode || sale.externalReferences?.affiliateReferralCode || "",
       sale.payment?.method || "现金",
       sale.payment?.reference || "",
+      sale.externalReferences?.simplePayReference || "",
+      sale.externalReferences?.affiliateOrderId || "",
       getFollowUpStatusText(sale),
       sale.followUp?.updatedAt ? new Date(sale.followUp.updatedAt).toLocaleString() : "",
       sale.service?.name || "",
@@ -2802,7 +2820,7 @@ function exportCustomers() {
     alert("还没有客户资料可以导出。");
     return;
   }
-  const rows = [["客户姓名", "电话", "最近订单号", "最近分行", "最近消费时间", "计划名称", "计划开始", "计划结束", "到期状态", "跟进状态", "消费次数", "累计消费"]];
+  const rows = [["客户姓名", "电话", "联盟推荐码", "最近订单号", "最近分行", "最近消费时间", "计划名称", "计划开始", "计划结束", "到期状态", "跟进状态", "消费次数", "累计消费"]];
   const customerMap = new Map();
   for (const sale of [...getActiveSales()].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))) {
     const key = `${sale.customer?.phone || ""}-${sale.customer?.name || ""}`.trim() || sale.id;
@@ -2821,6 +2839,7 @@ function exportCustomers() {
     rows.push([
       sale.customer?.name || "",
       sale.customer?.phone || "",
+      sale.customer?.referralCode || sale.externalReferences?.affiliateReferralCode || "",
       sale.id,
       sale.branchName || getBranchName(sale.branchId || "hq"),
       new Date(sale.createdAt).toLocaleString(),
