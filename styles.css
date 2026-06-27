@@ -876,6 +876,40 @@ dialog::backdrop {
   padding: 18px;
 }
 
+.printer-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.printer-settings label {
+  display: grid;
+  gap: 6px;
+  max-width: 260px;
+}
+
+.printer-settings .printer-checkbox {
+  display: flex;
+  align-items: center;
+  max-width: none;
+}
+
+.printer-checkbox input {
+  min-height: auto;
+  width: 18px;
+  height: 18px;
+}
+
+.printer-actions,
+.receipt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.receipt-actions button {
+  flex: 1 1 160px;
+}
+
 #receiptDialog {
   width: min(560px, calc(100% - 24px));
 }

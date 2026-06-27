@@ -16,11 +16,12 @@ const STORAGE_KEYS = {
   pendingAuditLogs: "simple-herbal-pos-pending-audit-logs",
   stockAdjustments: "simple-herbal-pos-stock-adjustments",
   auditLogs: "simple-herbal-pos-local-audit-logs",
-  settings: "simple-herbal-pos-settings"
+  settings: "simple-herbal-pos-settings",
+  printerSettings: "simple-herbal-pos-printer-settings"
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.55";
+const APP_VERSION = "v0.56";
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -33,6 +34,12 @@ const defaultSettings = {
   serviceDays: 21,
   lowStockThreshold: 5,
   receiptFooter: "谢谢惠顾"
+};
+const defaultPrinterSettings = {
+  paperWidth: "58",
+  autoPrint: false,
+  deviceId: "",
+  deviceName: ""
 };
 
 const sampleProducts = [
@@ -53,6 +60,10 @@ let pendingAuditLogs = load(STORAGE_KEYS.pendingAuditLogs, []);
 let stockAdjustments = load(STORAGE_KEYS.stockAdjustments, []);
 let auditLogs = load(STORAGE_KEYS.auditLogs, []);
 let appSettings = load(STORAGE_KEYS.settings, defaultSettings);
+let printerSettings = {
+  ...defaultPrinterSettings,
+  ...load(STORAGE_KEYS.printerSettings, defaultPrinterSettings)
+};
 let cart = [];
 let deferredInstallPrompt = null;
 let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
@@ -68,6 +79,7 @@ let autoFillPaid = true;
 let currentView = "order";
 let paymentMethodInitialized = false;
 let showMoreSales = false;
+let lastReceiptSale = null;
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -235,7 +247,16 @@ const els = {
   receiptNo: document.querySelector("#receiptNo"),
   receiptText: document.querySelector("#receiptText"),
   closeReceiptBtn: document.querySelector("#closeReceiptBtn"),
-  printReceiptBtn: document.querySelector("#printReceiptBtn")
+  printReceiptBtn: document.querySelector("#printReceiptBtn"),
+  bluetoothPrintReceiptBtn: document.querySelector("#bluetoothPrintReceiptBtn"),
+  receiptPrinterStatus: document.querySelector("#receiptPrinterStatus"),
+  printerPaperWidth: document.querySelector("#printerPaperWidth"),
+  printerAutoPrint: document.querySelector("#printerAutoPrint"),
+  printerConnectBtn: document.querySelector("#printerConnectBtn"),
+  printerPairBtn: document.querySelector("#printerPairBtn"),
+  printerTestBtn: document.querySelector("#printerTestBtn"),
+  printerForgetBtn: document.querySelector("#printerForgetBtn"),
+  printerStatus: document.querySelector("#printerStatus")
 };
 
 function load(key, fallback) {
@@ -1552,6 +1573,7 @@ function renderAll() {
   renderCart();
   renderSales();
   renderSettingsForm();
+  renderPrinterSettings();
   renderFollowUps();
   renderLowStock();
   renderMenuProductList();
@@ -1723,6 +1745,24 @@ function renderSettingsForm() {
   els.serviceDaysInput.value = appSettings.serviceDays;
   els.lowStockThresholdInput.value = appSettings.lowStockThreshold ?? 5;
   els.receiptFooterInput.value = appSettings.receiptFooter;
+}
+
+function renderPrinterSettings() {
+  if (!els.printerPaperWidth) return;
+  els.printerPaperWidth.value = printerSettings.paperWidth;
+  els.printerAutoPrint.checked = Boolean(printerSettings.autoPrint);
+  const printer = window.thermalPrinter;
+  const supported = Boolean(printer?.isSupported());
+  const connected = Boolean(printer?.isConnected());
+  const printing = Boolean(printer?.isPrinting());
+  els.printerConnectBtn.disabled = !supported || connected || printing;
+  els.printerPairBtn.disabled = !supported || printing;
+  els.printerTestBtn.disabled = !supported || !connected || printing;
+  els.printerForgetBtn.disabled = printing || (!printerSettings.deviceId && !printer?.getDeviceInfo().id);
+  els.bluetoothPrintReceiptBtn.disabled = !supported || printing;
+  if (!supported) {
+    updatePrinterStatus("此浏览器不支持蓝牙直连，请使用 Android 或电脑的 Chrome / Edge。", "error");
+  }
 }
 
 function daysUntil(dateValue) {
@@ -2204,9 +2244,13 @@ async function checkout() {
 }
 
 function showReceipt(sale) {
+  lastReceiptSale = sale;
   els.receiptNo.textContent = `订单号：${sale.id}`;
   els.receiptText.textContent = buildReceipt(sale);
   els.receiptDialog.showModal();
+  if (printerSettings.autoPrint && window.thermalPrinter?.isConnected()) {
+    printBluetoothReceipt(sale, true);
+  }
 }
 
 function buildReceipt(sale) {
@@ -2234,6 +2278,129 @@ function buildReceipt(sale) {
   if (sale.payment?.reference) lines.push(`参考号：${sale.payment.reference}`);
   lines.push(appSettings.receiptFooter);
   return lines.join("\n");
+}
+
+function savePrinterSettings() {
+  printerSettings = {
+    ...printerSettings,
+    paperWidth: els.printerPaperWidth.value === "80" ? "80" : "58",
+    autoPrint: els.printerAutoPrint.checked
+  };
+  save(STORAGE_KEYS.printerSettings, printerSettings);
+}
+
+function updatePrinterStatus(message, state = "idle") {
+  if (els.printerStatus) {
+    els.printerStatus.textContent = message;
+    els.printerStatus.classList.toggle("error", state === "error");
+  }
+  if (els.receiptPrinterStatus) {
+    els.receiptPrinterStatus.textContent = message;
+    els.receiptPrinterStatus.style.color = state === "error" ? "var(--danger)" : "";
+  }
+}
+
+function getBluetoothErrorMessage(error) {
+  if (error?.name === "NotFoundError") return "未选择打印机";
+  if (error?.name === "NotAllowedError") return "蓝牙权限未获允许";
+  if (error?.name === "NetworkError") return "打印机连接中断，请确认打印机已开机并靠近设备";
+  return error?.message || "蓝牙打印失败";
+}
+
+async function pairBluetoothPrinter() {
+  try {
+    updatePrinterStatus("正在等待选择打印机...");
+    const info = await window.thermalPrinter.pair();
+    printerSettings.deviceId = info.id;
+    printerSettings.deviceName = info.name;
+    savePrinterSettings();
+    updatePrinterStatus(`${info.name || "蓝牙打印机"} 已连接`, "connected");
+  } catch (error) {
+    updatePrinterStatus(getBluetoothErrorMessage(error), "error");
+  }
+  renderPrinterSettings();
+}
+
+async function reconnectBluetoothPrinter() {
+  try {
+    updatePrinterStatus("正在连接打印机...");
+    const info = await window.thermalPrinter.reconnect(printerSettings.deviceId);
+    printerSettings.deviceId = info.id;
+    printerSettings.deviceName = info.name;
+    savePrinterSettings();
+  } catch (error) {
+    updatePrinterStatus(getBluetoothErrorMessage(error), "error");
+  }
+  renderPrinterSettings();
+}
+
+async function forgetBluetoothPrinter() {
+  try {
+    await window.thermalPrinter?.forget();
+  } catch (error) {
+    console.warn("Bluetooth printer forget failed", error);
+  }
+  printerSettings.deviceId = "";
+  printerSettings.deviceName = "";
+  savePrinterSettings();
+  updatePrinterStatus("尚未连接打印机");
+  renderPrinterSettings();
+}
+
+async function ensureBluetoothPrinter() {
+  if (!window.thermalPrinter?.isSupported()) {
+    throw new Error("此浏览器不支持蓝牙直连，请使用 Android 或电脑的 Chrome / Edge");
+  }
+  if (window.thermalPrinter.isConnected()) return;
+  if (printerSettings.deviceId) {
+    await window.thermalPrinter.reconnect(printerSettings.deviceId);
+    return;
+  }
+  const info = await window.thermalPrinter.pair();
+  printerSettings.deviceId = info.id;
+  printerSettings.deviceName = info.name;
+  savePrinterSettings();
+}
+
+async function printBluetoothLines(lines) {
+  await ensureBluetoothPrinter();
+  await window.thermalPrinter.printLines(lines, printerSettings.paperWidth);
+}
+
+async function printBluetoothReceipt(sale = lastReceiptSale, automatic = false) {
+  if (!sale) {
+    updatePrinterStatus("没有可打印的小票", "error");
+    return;
+  }
+  if (automatic && !window.thermalPrinter?.isConnected()) return;
+  try {
+    els.bluetoothPrintReceiptBtn.disabled = true;
+    await printBluetoothLines(buildReceipt(sale).split("\n"));
+  } catch (error) {
+    updatePrinterStatus(getBluetoothErrorMessage(error), "error");
+  } finally {
+    els.bluetoothPrintReceiptBtn.disabled = false;
+    renderPrinterSettings();
+  }
+}
+
+async function testBluetoothPrinter() {
+  const lines = [
+    appSettings.businessName,
+    "蓝牙打印测试",
+    "中文 / English / 123456",
+    `纸宽：${printerSettings.paperWidth}mm`,
+    new Date().toLocaleString(),
+    "打印正常"
+  ];
+  try {
+    els.printerTestBtn.disabled = true;
+    await printBluetoothLines(lines);
+  } catch (error) {
+    updatePrinterStatus(getBluetoothErrorMessage(error), "error");
+  } finally {
+    renderPrinterSettings();
+  }
 }
 
 function renderSales() {
@@ -3023,6 +3190,23 @@ els.seedBtn.addEventListener("click", () => {
 });
 els.closeReceiptBtn.addEventListener("click", () => els.receiptDialog.close());
 els.printReceiptBtn.addEventListener("click", () => window.print());
+els.bluetoothPrintReceiptBtn.addEventListener("click", () => printBluetoothReceipt());
+els.printerPaperWidth.addEventListener("change", savePrinterSettings);
+els.printerAutoPrint.addEventListener("change", savePrinterSettings);
+els.printerConnectBtn.addEventListener("click", reconnectBluetoothPrinter);
+els.printerPairBtn.addEventListener("click", pairBluetoothPrinter);
+els.printerTestBtn.addEventListener("click", testBluetoothPrinter);
+els.printerForgetBtn.addEventListener("click", forgetBluetoothPrinter);
+window.addEventListener("thermal-printer-status", (event) => {
+  const { state, message, deviceId, deviceName } = event.detail;
+  if (deviceId) {
+    printerSettings.deviceId = deviceId;
+    printerSettings.deviceName = deviceName;
+    save(STORAGE_KEYS.printerSettings, printerSettings);
+  }
+  updatePrinterStatus(message, state);
+  renderPrinterSettings();
+});
 window.addEventListener("online", () => {
   updateNetworkStatus();
   syncPendingChanges();
@@ -3081,3 +3265,8 @@ setAppView("order");
 migrateManagementData();
 migrateProductsForBranches();
 renderAll();
+if (window.thermalPrinter?.isSupported()) {
+  window.thermalPrinter.restore(printerSettings.deviceId).catch((error) => {
+    console.warn("Bluetooth printer restore failed", error);
+  });
+}

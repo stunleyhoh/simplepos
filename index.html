@@ -200,6 +200,31 @@
         </div>
 
         <div class="panel-subsection" data-view-panel="settings">
+          <h3>蓝牙小票打印机</h3>
+          <p class="helper-text">适用于支持 BLE 的 ESC/POS 58mm / 80mm 热敏打印机。打印机配对资料只保存在这台收银设备。</p>
+          <div class="printer-settings">
+            <label>
+              纸张宽度
+              <select id="printerPaperWidth">
+                <option value="58">58mm</option>
+                <option value="80">80mm</option>
+              </select>
+            </label>
+            <label class="printer-checkbox">
+              <input id="printerAutoPrint" type="checkbox">
+              收款后自动打印
+            </label>
+            <div class="printer-actions">
+              <button id="printerConnectBtn" class="primary" type="button">连接已配对打印机</button>
+              <button id="printerPairBtn" class="ghost" type="button">配对 / 更换</button>
+              <button id="printerTestBtn" class="ghost" type="button">测试打印</button>
+              <button id="printerForgetBtn" class="ghost danger" type="button">移除打印机</button>
+            </div>
+            <p id="printerStatus" class="form-message">尚未连接打印机</p>
+          </div>
+        </div>
+
+        <div class="panel-subsection" data-view-panel="settings">
           <h3>开设新分行</h3>
           <form id="branchForm" class="branch-form">
             <input id="branchNameInput" required placeholder="分行名称，例如：槟城分行">
@@ -390,10 +415,15 @@
         <button id="closeReceiptBtn" class="ghost" type="button">关闭</button>
       </div>
       <pre id="receiptText"></pre>
-      <button id="printReceiptBtn" class="primary" type="button">打印小票</button>
+      <p id="receiptPrinterStatus" class="helper-text">蓝牙打印机尚未连接</p>
+      <div class="receipt-actions">
+        <button id="bluetoothPrintReceiptBtn" class="primary" type="button">蓝牙打印</button>
+        <button id="printReceiptBtn" class="ghost" type="button">系统打印</button>
+      </div>
     </div>
   </dialog>
 
+  <script src="bluetooth-printer.js"></script>
   <script src="app.js"></script>
   <script type="module" src="firebase-cloud.js"></script>
 </body>

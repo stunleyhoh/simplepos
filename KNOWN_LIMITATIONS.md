@@ -7,9 +7,9 @@
 当前做法：
 
 - 收款时先扣本机库存。
-- 在线时优先使用 Firestore Transaction 写入销售并扣减云端库存。
-- 在线 transaction 失败时，本机订单和库存会回滚。
-- 断网时把库存变更加入待同步队列。
+- 订单和库存立即保存在本机，不等待网络完成。
+- 在线时在后台使用 Firestore Transaction 写入销售并扣减云端库存。
+- 云端暂时失败时保留本机订单，并加入待同步队列稍后重试。
 
 限制：
 
@@ -65,3 +65,9 @@
 
 - 上线部署时必须确保部署版本能读取真实 Firebase 配置。
 - API Key 应限制 HTTP referrers。
+## 蓝牙打印
+
+- 网页蓝牙直连需要 Android 或电脑的 Chrome / Edge，并要求 HTTPS 或 localhost。
+- iPhone / iPad 浏览器目前不支持 Web Bluetooth。
+- 只支持传统 Bluetooth Classic SPP、不支持 BLE 的热敏打印机不会出现在配对清单中，可改用“系统打印”。
+- 不同厂牌 ESC/POS 蓝牙服务可能采用专用 UUID；若能够配对但提示找不到打印通道，需要补充该型号的服务 UUID。
