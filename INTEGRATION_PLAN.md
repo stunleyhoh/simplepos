@@ -10,6 +10,21 @@
 
 当前只在 POS 订单保存关联资料，不持续监听或读取另外两个项目。
 
+## 自动融合基础（v0.74）
+
+POS 现在会为新订单建立确定性的 integration outbox 任务，并随订单云端事务一起保存到
+`integrationJobs`。相同订单重复同步会使用相同任务编号，避免重复扣款或重复发放奖励。
+
+- SimplePay：`simplepay.payment`、`simplepay.refund`
+- 联盟系统：`affiliate.fulfill`、`affiliate.reverse`
+- 每个任务都有 `idempotencyKey`、`schemaVersion`、`posOrderId`、分行、金额和处理状态
+- SimplePay 未有付款参考号时只建立付款意图，并标记需要顾客授权，不会由 POS 擅自扣款
+- 联盟任务可以通过 `blockedBy` 等待 SimplePay 付款或退款先完成
+- 断网订单恢复联网并写入云端时，才会同时生成这些任务
+
+目前没有跨项目处理器，任务只安全排队，不会直接写入另外两个 Firebase 项目。下一阶段由可信
+Cloud Function 读取任务并调用 SimplePay / 联盟后端，再回写任务结果。
+
 ## 统一订单关联
 
 每张新 POS 订单包含：

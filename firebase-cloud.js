@@ -190,6 +190,19 @@ async function saveSale(sale) {
   }, { merge: true });
 }
 
+function writeIntegrationJobs(transaction, sale, eventType) {
+  if (!window.integrationContract) return [];
+  const jobs = window.integrationContract.buildJobs(sale, eventType);
+  for (const job of jobs) {
+    transaction.set(doc(db, "integrationJobs", job.id), {
+      ...job,
+      cloudCreatedAt: serverTimestamp(),
+      cloudUpdatedAt: serverTimestamp()
+    });
+  }
+  return jobs;
+}
+
 async function saveCheckout(sale) {
   return runTransaction(db, async (transaction) => {
     const saleRef = doc(db, "sales", sale.id);
@@ -248,7 +261,12 @@ async function saveCheckout(sale) {
         syncStatus: "review-required",
         syncedAt: serverTimestamp()
       }, { merge: true });
-      return { status: "inventory-review", inventoryReview };
+      const integrationJobs = writeIntegrationJobs(transaction, sale, "checkout");
+      return {
+        status: "inventory-review",
+        inventoryReview,
+        integrationJobIds: integrationJobs.map((job) => job.id)
+      };
     }
 
     snapshots.forEach((snapshot, index) => {
@@ -269,7 +287,12 @@ async function saveCheckout(sale) {
       syncStatus: "synced",
       syncedAt: serverTimestamp()
     }, { merge: true });
-    return { status: "synced", inventoryReview: null };
+    const integrationJobs = writeIntegrationJobs(transaction, sale, "checkout");
+    return {
+      status: "synced",
+      inventoryReview: null,
+      integrationJobIds: integrationJobs.map((job) => job.id)
+    };
   });
 }
 
@@ -352,10 +375,18 @@ async function saveVoid(sale) {
       });
     }
 
+    const voidedSale = {
+      ...existingSale,
+      ...sale,
+      status: "voided",
+      inventoryReview
+    };
+    const integrationJobs = writeIntegrationJobs(transaction, voidedSale, "void");
     transaction.update(saleRef, {
       status: "voided",
       voidedAt: sale.voidedAt || new Date().toISOString(),
       voidedBy: sale.voidedBy || null,
+      integrationOutbox: sale.integrationOutbox || existingSale.integrationOutbox || null,
       inventoryReview,
       syncStatus: missingProducts.length ? "review-required" : "synced",
       updatedAt: serverTimestamp(),
@@ -366,7 +397,8 @@ async function saveVoid(sale) {
       stockStatus: hadInventoryConflict
         ? "not-required"
         : (missingProducts.length ? "review-required" : "restored"),
-      inventoryReview
+      inventoryReview,
+      integrationJobIds: integrationJobs.map((job) => job.id)
     };
   });
 }

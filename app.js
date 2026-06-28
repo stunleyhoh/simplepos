@@ -22,7 +22,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.72";
+const APP_VERSION = "v0.74";
 const AUTHORIZATION_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const defaultBranches = [
   { id: "hq", name: "总店" },
@@ -76,9 +76,9 @@ let printerSettings = {
 };
 let cart = [];
 let deferredInstallPrompt = null;
-let adminEmail = localStorage.getItem(STORAGE_KEYS.adminEmail) || "";
+let adminEmail = readSessionEmail(STORAGE_KEYS.adminEmail);
 let currentBranchId = localStorage.getItem(STORAGE_KEYS.branchId) || "hq";
-let operatorEmail = localStorage.getItem(STORAGE_KEYS.operatorEmail) || "";
+let operatorEmail = readSessionEmail(STORAGE_KEYS.operatorEmail);
 let preferredPaymentMethod = localStorage.getItem(STORAGE_KEYS.paymentMethod) || "现金";
 let currentShift = load(STORAGE_KEYS.currentShift, null);
 let shifts = load(STORAGE_KEYS.shifts, []);
@@ -194,6 +194,7 @@ const els = {
   closePaymentBtn: document.querySelector("#closePaymentBtn"),
   adminLoginForm: document.querySelector("#adminLoginForm"),
   adminEmailInput: document.querySelector("#adminEmailInput"),
+  adminPasswordInput: document.querySelector("#adminPasswordInput"),
   adminGoogleLoginBtn: document.querySelector("#adminGoogleLoginBtn"),
   adminLoginMessage: document.querySelector("#adminLoginMessage"),
   adminLogoutBtn: document.querySelector("#adminLogoutBtn"),
@@ -248,6 +249,10 @@ const els = {
   followUpList: document.querySelector("#followUpList"),
   lowStockList: document.querySelector("#lowStockList"),
   settingsForm: document.querySelector("#settingsForm"),
+  adminOfflinePasswordForm: document.querySelector("#adminOfflinePasswordForm"),
+  adminOfflinePasswordInput: document.querySelector("#adminOfflinePasswordInput"),
+  adminOfflinePasswordConfirm: document.querySelector("#adminOfflinePasswordConfirm"),
+  adminOfflinePasswordStatus: document.querySelector("#adminOfflinePasswordStatus"),
   businessNameInput: document.querySelector("#businessNameInput"),
   defaultServiceNameInput: document.querySelector("#defaultServiceNameInput"),
   serviceDaysInput: document.querySelector("#serviceDaysInput"),
@@ -329,6 +334,33 @@ const els = {
   cashMovementList: document.querySelector("#cashMovementList"),
   closeCashMovementBtn: document.querySelector("#closeCashMovementBtn")
 };
+
+function readSessionEmail(key) {
+  try {
+    localStorage.removeItem(key);
+    return sessionStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function persistSessionEmail(key, value) {
+  try {
+    sessionStorage.setItem(key, value);
+    localStorage.removeItem(key);
+  } catch (error) {
+    reportStorageError(error);
+  }
+}
+
+function clearSessionEmail(key) {
+  try {
+    sessionStorage.removeItem(key);
+    localStorage.removeItem(key);
+  } catch (error) {
+    console.warn("Session clear failed", error);
+  }
+}
 
 function load(key, fallback) {
   let raw = null;
@@ -449,6 +481,11 @@ function normalizeSaleExternalReferences(sale = {}) {
         || (affiliateOrderId ? "linked" : (referralCode ? "pending" : "not-used"))
     }
   };
+}
+
+function attachIntegrationOutbox(sale, eventType = "checkout") {
+  if (!window.integrationContract) return sale;
+  return window.integrationContract.attachJobReferences(sale, eventType);
 }
 
 function getInventoryReviewStatus(sale) {
@@ -1671,7 +1708,7 @@ async function loginOperator(event) {
   }
   operatorEmail = user.email;
   currentBranchId = user.branchId;
-  localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+  persistSessionEmail(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   els.operatorEmailInput.value = "";
   els.operatorPasswordInput.value = "";
@@ -1733,8 +1770,8 @@ function lockCloudSession(email, reason, markInactive = false) {
   cloudSessionActive = false;
   lastAuthorizationCheckAt = 0;
   cart = [];
-  localStorage.removeItem(STORAGE_KEYS.adminEmail);
-  localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+  clearSessionEmail(STORAGE_KEYS.adminEmail);
+  clearSessionEmail(STORAGE_KEYS.operatorEmail);
   updateCloudStatus(reason);
   logoutCloudIfReady();
   renderAll();
@@ -1748,8 +1785,8 @@ function lockOfflineSessionForOnlineVerification() {
   cloudSessionActive = false;
   lastAuthorizationCheckAt = 0;
   cart = [];
-  localStorage.removeItem(STORAGE_KEYS.operatorEmail);
-  localStorage.removeItem(STORAGE_KEYS.adminEmail);
+  clearSessionEmail(STORAGE_KEYS.operatorEmail);
+  clearSessionEmail(STORAGE_KEYS.adminEmail);
   updateCloudStatus("网络已恢复，等待 Google 重新验证");
   renderAll();
   alert(`网络已恢复，请使用 Google 登录重新验证身份。${hasOpenShift() ? "\n\n当前班次已保留，原员工验证后可继续。" : ""}`);
@@ -1770,13 +1807,13 @@ function applyRefreshedAuthorization(appUser) {
   currentCloudUser = cachedUser;
   cloudSessionActive = true;
   operatorEmail = cachedUser.email;
-  localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+  persistSessionEmail(STORAGE_KEYS.operatorEmail, operatorEmail);
   if (cachedUser.role === "admin") {
     adminEmail = cachedUser.email;
-    localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+    persistSessionEmail(STORAGE_KEYS.adminEmail, adminEmail);
   } else {
     adminEmail = "";
-    localStorage.removeItem(STORAGE_KEYS.adminEmail);
+    clearSessionEmail(STORAGE_KEYS.adminEmail);
     currentBranchId = cachedUser.branchId || "hq";
     localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
     if (currentBranchId !== previousBranchId) cart = [];
@@ -1810,7 +1847,7 @@ async function refreshCloudAuthorization({ force = false } = {}) {
 function logoutOperator() {
   if (currentShift && !currentShift.closedAt && !confirm("当前班次尚未结束。退出后班次会保留，只有原员工重新登录或管理员交班后才能继续。确定退出吗？")) return;
   operatorEmail = "";
-  localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+  clearSessionEmail(STORAGE_KEYS.operatorEmail);
   logoutCloudIfReady();
   cart = [];
   renderAll();
@@ -2293,17 +2330,17 @@ async function applyCloudUser(appUser, firebaseUser = null) {
   if (appUser.role === "admin") {
     adminEmail = normalizeEmail(appUser.email);
     ensureAdminAuthorized(adminEmail);
-    localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+    persistSessionEmail(STORAGE_KEYS.adminEmail, adminEmail);
     currentBranchId = branches.some((branch) => branch.id === currentBranchId) ? currentBranchId : "hq";
   } else {
     adminEmail = "";
-    localStorage.removeItem(STORAGE_KEYS.adminEmail);
+    clearSessionEmail(STORAGE_KEYS.adminEmail);
     currentBranchId = appUser.branchId || "hq";
     if (currentBranchId !== previousBranchId) cart = [];
   }
 
   operatorEmail = appUser.email;
-  localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+  persistSessionEmail(STORAGE_KEYS.operatorEmail, operatorEmail);
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   if (!hasOpenShift() || isShiftIdentity(appUser.email, currentBranchId)) ensureCurrentShift();
   updateCloudStatus(`云端已登录：${appUser.email}`, true);
@@ -2339,30 +2376,55 @@ function requireCloudAdmin() {
 
 async function loginAdmin(event) {
   event.preventDefault();
+  if (navigator.onLine) {
+    els.adminLoginMessage.textContent = "联网时后台必须使用 Google 管理员登录。";
+    els.adminLoginMessage.classList.remove("error");
+    await signInWithGoogle();
+    return;
+  }
   const email = normalizeEmail(els.adminEmailInput.value);
+  const password = els.adminPasswordInput.value;
   if (!(await isConfiguredAdminEmail(email))) {
     els.adminLoginMessage.textContent = "邮箱不匹配，无法进入后台。";
     els.adminLoginMessage.classList.add("error");
     return;
   }
-  adminEmail = email;
-  ensureAdminAuthorized(email);
-  localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+  const adminUser = authorizedUsers.find((user) =>
+    normalizeEmail(user.email) === email
+    && user.active !== false
+    && (user.role === "admin" || user.role === "管理员")
+  );
+  if (!adminUser?.offlinePasswordHash) {
+    els.adminLoginMessage.textContent = "管理员尚未设置离线密码，请联网后使用 Google 管理员登录设置。";
+    els.adminLoginMessage.classList.add("error");
+    return;
+  }
+  if (!(await verifyOfflinePassword(adminUser, password))) {
+    els.adminLoginMessage.textContent = "管理员离线密码不正确。";
+    els.adminLoginMessage.classList.add("error");
+    els.adminPasswordInput.focus();
+    return;
+  }
+  adminEmail = adminUser.email;
+  persistSessionEmail(STORAGE_KEYS.adminEmail, adminEmail);
   if (!operatorEmail) {
-    operatorEmail = email;
-    localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+    operatorEmail = adminUser.email;
+    persistSessionEmail(STORAGE_KEYS.operatorEmail, operatorEmail);
   }
   els.adminEmailInput.value = "";
+  els.adminPasswordInput.value = "";
+  els.adminLoginMessage.textContent = "管理员离线身份已验证。";
+  els.adminLoginMessage.classList.remove("error");
   renderAll();
 }
 
 function logoutAdmin() {
   const previousAdminEmail = normalizeEmail(adminEmail);
   adminEmail = "";
-  localStorage.removeItem(STORAGE_KEYS.adminEmail);
+  clearSessionEmail(STORAGE_KEYS.adminEmail);
   if (previousAdminEmail && normalizeEmail(operatorEmail) === previousAdminEmail) {
     operatorEmail = "";
-    localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+    clearSessionEmail(STORAGE_KEYS.operatorEmail);
   }
   els.adminLoginMessage.textContent = "商品管理、导出销售记录和清空数据仅管理员可用。";
   els.adminLoginMessage.classList.remove("error");
@@ -2935,6 +2997,58 @@ function renderSettingsForm() {
   els.serviceDaysInput.value = appSettings.serviceDays;
   els.lowStockThresholdInput.value = appSettings.lowStockThreshold ?? 5;
   els.receiptFooterInput.value = appSettings.receiptFooter;
+  const adminUser = authorizedUsers.find((user) =>
+    normalizeEmail(user.email) === normalizeEmail(adminEmail || currentCloudUser?.email)
+    && (user.role === "admin" || user.role === "管理员")
+  );
+  els.adminOfflinePasswordStatus.textContent = adminUser?.offlinePasswordHash
+    ? `已设置${isCloudAdmin() ? "，可在此更新" : "；更新时需要 Google 管理员登录"}`
+    : `尚未设置${isCloudAdmin() ? "" : "；请先使用 Google 管理员登录"}`;
+}
+
+async function saveAdminOfflinePassword(event) {
+  event.preventDefault();
+  if (!requireCloudAdmin()) return;
+  const password = els.adminOfflinePasswordInput.value;
+  const confirmation = els.adminOfflinePasswordConfirm.value;
+  if (password.length < 8) {
+    alert("管理员离线密码至少需要 8 位。");
+    els.adminOfflinePasswordInput.focus();
+    return;
+  }
+  if (password !== confirmation) {
+    alert("两次输入的管理员离线密码不一致。");
+    els.adminOfflinePasswordConfirm.focus();
+    return;
+  }
+  const email = normalizeEmail(currentCloudUser.email);
+  if (!(await isConfiguredAdminEmail(email))) {
+    alert("当前 Google 账号不是唯一管理员。");
+    return;
+  }
+  const existing = authorizedUsers.find((user) => normalizeEmail(user.email) === email) || {};
+  const offlinePasswordSalt = createPasswordSalt();
+  const adminUser = {
+    ...existing,
+    id: existing.id || "admin-user",
+    name: currentCloudUser.name || existing.name || "管理员",
+    email,
+    branchId: "hq",
+    role: "admin",
+    active: true,
+    offlinePasswordSalt,
+    offlinePasswordHash: await hashOfflinePassword(email, password, offlinePasswordSalt)
+  };
+  authorizedUsers = authorizedUsers.some((user) => normalizeEmail(user.email) === email)
+    ? authorizedUsers.map((user) => normalizeEmail(user.email) === email ? adminUser : user)
+    : [adminUser, ...authorizedUsers];
+  currentCloudUser = { ...currentCloudUser, ...adminUser };
+  save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  syncManagementToCloud("user", adminUser);
+  writeAuditLog("admin.offline-password.update", { email });
+  els.adminOfflinePasswordForm.reset();
+  els.adminOfflinePasswordStatus.textContent = "管理员离线密码已安全更新。";
+  renderManagementLists();
 }
 
 function renderPrinterSettings() {
@@ -2958,6 +3072,12 @@ function renderPrinterSettings() {
 function renderIntegrationOverview() {
   if (!els.integrationOverview) return;
   const activeSales = getActiveSales();
+  const outboxJobCount = sales.reduce((total, sale) => {
+    const outbox = sale.integrationOutbox || {};
+    return total
+      + (Array.isArray(outbox.checkoutJobIds) ? outbox.checkoutJobIds.length : 0)
+      + (Array.isArray(outbox.voidJobIds) ? outbox.voidJobIds.length : 0);
+  }, 0);
   const references = activeSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
   const simplePayRows = references.filter((item) => item.simplePayStatus !== "not-used");
   const affiliateRows = references.filter((item) => item.affiliateStatus !== "not-used");
@@ -2977,6 +3097,13 @@ function renderIntegrationOverview() {
         <small>订单内保存参考号，暂不进行跨项目实时查询</small>
       </div>
       <span>低成本手动关联</span>
+    </div>
+    <div class="management-row">
+      <div>
+        <strong>Integration outbox</strong>
+        <small>订单同步时一并建立，使用固定任务编号避免重复处理</small>
+      </div>
+      <span>${outboxJobCount} 项任务</span>
     </div>
     <div class="management-row">
       <div>
@@ -3588,7 +3715,7 @@ function voidSale(saleId) {
     adjustments.push(adjustment);
     return updatedProduct;
   });
-  const updatedSale = {
+  const updatedSale = attachIntegrationOutbox({
     ...sale,
     status: "voided",
     voidedAt,
@@ -3601,7 +3728,7 @@ function voidSale(saleId) {
       resolution: "order-voided"
     } : sale.inventoryReview,
     syncStatus: "pending-update"
-  };
+  }, "void");
   const nextSales = sales.map((item) => item.id === saleId ? updatedSale : item);
   const nextPendingSales = pendingSales.filter((item) => item.id !== saleId);
   const nextPendingSaleUpdates = [
@@ -3933,7 +4060,7 @@ async function checkout() {
 
   const saleId = createPosOrderId();
   const affiliateReferralCode = els.affiliateReferralCodeInput.value.trim().toUpperCase();
-  const sale = {
+  const sale = attachIntegrationOutbox({
     id: saleId,
     createdAt: createdAt.toISOString(),
     branchId: currentBranchId,
@@ -3972,7 +4099,7 @@ async function checkout() {
       affiliateStatus: affiliateReferralCode ? "pending" : "not-used"
     },
     syncStatus: navigator.onLine && hasCloud() ? "queued" : "pending"
-  };
+  }, "checkout");
 
   const changedProducts = [];
   const nextProducts = products.map((product) => {
@@ -5301,6 +5428,7 @@ els.adminLogoutBtn.addEventListener("click", logoutAdmin);
 els.branchForm.addEventListener("submit", addBranch);
 els.userForm.addEventListener("submit", addAuthorizedUser);
 els.settingsForm.addEventListener("submit", saveSettings);
+els.adminOfflinePasswordForm.addEventListener("submit", saveAdminOfflinePassword);
 els.productForm.addEventListener("submit", saveProduct);
 els.cancelProductEditBtn.addEventListener("click", resetProductFormEditor);
 els.initCloudBtn.addEventListener("click", initializeCloudData);
@@ -5380,8 +5508,8 @@ window.addEventListener("cloud-auth-change", (event) => {
       currentCloudUser = null;
       lastAuthorizationCheckAt = 0;
       cart = [];
-      localStorage.removeItem(STORAGE_KEYS.adminEmail);
-      localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+      clearSessionEmail(STORAGE_KEYS.adminEmail);
+      clearSessionEmail(STORAGE_KEYS.operatorEmail);
       cloudSessionActive = false;
     }
     updateCloudStatus("云端未登录");

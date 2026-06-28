@@ -1,8 +1,9 @@
-const CACHE_NAME = "simple-pos-v84";
+const CACHE_NAME = "simple-pos-v86";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
+  "./integration-contract.js",
   "./bluetooth-printer.js",
   "./app.js",
   "./firebase-config.js",

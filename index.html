@@ -106,8 +106,9 @@
 
       <form id="adminLoginForm" class="admin-login">
         <input id="adminEmailInput" type="email" autocomplete="username" required placeholder="输入管理员邮箱（不会显示）">
-        <button class="primary" type="submit">进入后台</button>
-        <button id="adminGoogleLoginBtn" class="ghost" type="button">Google 管理员登录</button>
+        <input id="adminPasswordInput" type="password" autocomplete="current-password" minlength="8" required placeholder="管理员离线密码（断网时使用）">
+        <button class="ghost" type="submit">离线进入后台</button>
+        <button id="adminGoogleLoginBtn" class="primary" type="button">Google 管理员登录</button>
         <p id="adminLoginMessage" class="form-message">商品管理、导出销售记录和清空数据仅管理员可用。</p>
       </form>
 
@@ -216,6 +217,17 @@
             <input id="lowStockThresholdInput" required type="number" min="0" step="1" placeholder="低库存提醒阈值">
             <input id="receiptFooterInput" required placeholder="小票结尾">
             <button class="primary" type="submit">保存设置</button>
+          </form>
+        </div>
+
+        <div class="panel-subsection" data-view-panel="settings">
+          <h3>管理员离线密码</h3>
+          <p class="helper-text">必须先使用 Google 管理员登录。密码只保存加盐哈希，断网时才使用。</p>
+          <form id="adminOfflinePasswordForm" class="settings-form">
+            <input id="adminOfflinePasswordInput" required type="password" minlength="8" autocomplete="new-password" placeholder="新离线密码（至少 8 位）">
+            <input id="adminOfflinePasswordConfirm" required type="password" minlength="8" autocomplete="new-password" placeholder="再次输入新离线密码">
+            <button class="primary" type="submit">设置管理员离线密码</button>
+            <p id="adminOfflinePasswordStatus" class="form-message">尚未设置</p>
           </form>
         </div>
 
@@ -637,6 +649,7 @@
     </div>
   </dialog>
 
+  <script src="integration-contract.js"></script>
   <script src="bluetooth-printer.js"></script>
   <script src="app.js"></script>
   <script type="module" src="firebase-cloud.js"></script>

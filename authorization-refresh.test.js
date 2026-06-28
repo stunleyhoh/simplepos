@@ -32,6 +32,7 @@ function extractFunction(name) {
 }
 
 const storage = new Map();
+const sessionStorageValues = new Map();
 const audits = [];
 const alerts = [];
 const context = {
@@ -58,6 +59,14 @@ const context = {
     removeItem(key) {
       storage.delete(key);
     }
+  },
+  persistSessionEmail(key, value) {
+    sessionStorageValues.set(key, String(value));
+    storage.delete(key);
+  },
+  clearSessionEmail(key) {
+    sessionStorageValues.delete(key);
+    storage.delete(key);
   },
   normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
