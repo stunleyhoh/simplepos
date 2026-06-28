@@ -16,8 +16,8 @@ const missingIds = [...new Set(referencedIds.filter((id) => !htmlIds.includes(id
 assert.deepEqual(missingIds, [], "app.js 引用的控件必须存在于 index.html");
 
 const appVersion = app.match(/const APP_VERSION = "(v[^"]+)"/)?.[1];
-assert.equal(appVersion, "v0.67", "应用版本应为 v0.67");
-assert.match(serviceWorker, /simple-pos-v79/, "Service Worker 缓存版本应为 v79");
+assert.equal(appVersion, "v0.72", "应用版本应为 v0.72");
+assert.match(serviceWorker, /simple-pos-v84/, "Service Worker 缓存版本应为 v84");
 assert.match(app, /closedBy: getCurrentActor\(\)/, "交班记录必须保存实际结班人");
 assert.match(app, /"核对 \/ 结班人"/, "交班 CSV 必须包含实际结班人");
 

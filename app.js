@@ -14,6 +14,7 @@ const STORAGE_KEYS = {
   pendingProducts: "simple-herbal-pos-pending-products",
   pendingStockAdjustments: "simple-herbal-pos-pending-stock-adjustments",
   pendingAuditLogs: "simple-herbal-pos-pending-audit-logs",
+  pendingManagement: "simple-herbal-pos-pending-management",
   stockAdjustments: "simple-herbal-pos-stock-adjustments",
   auditLogs: "simple-herbal-pos-local-audit-logs",
   settings: "simple-herbal-pos-settings",
@@ -21,7 +22,8 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.67";
+const APP_VERSION = "v0.72";
+const AUTHORIZATION_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const defaultBranches = [
   { id: "hq", name: "总店" },
   { id: "branch-1", name: "分行 1" },
@@ -42,6 +44,11 @@ const defaultPrinterSettings = {
   deviceName: ""
 };
 
+const storageReadIssues = [];
+const protectedCorruptStorageKeys = new Set();
+let storageErrorAlertShown = false;
+let lastStorageWriteError = "";
+
 const sampleProducts = [
   { id: createId(), name: "简单草本减脂计划第一阶段", barcode: "SLIM-P1-3W", category: "草本减脂计划", price: 150, stock: 30, branchStock: { hq: 30, "branch-1": 12, "branch-2": 8 } },
   { id: createId(), name: "第一阶段复购包", barcode: "SLIM-P1-REFILL", category: "草本减脂计划", price: 150, stock: 20, branchStock: { hq: 20, "branch-1": 8, "branch-2": 5 } },
@@ -57,6 +64,9 @@ let pendingSaleUpdates = load(STORAGE_KEYS.pendingSaleUpdates, []).map(normalize
 let pendingProducts = load(STORAGE_KEYS.pendingProducts, []);
 let pendingStockAdjustments = load(STORAGE_KEYS.pendingStockAdjustments, []);
 let pendingAuditLogs = load(STORAGE_KEYS.pendingAuditLogs, []);
+let pendingManagement = normalizePendingManagement(
+  load(STORAGE_KEYS.pendingManagement, { branches: [], users: [], settings: null })
+);
 let stockAdjustments = load(STORAGE_KEYS.stockAdjustments, []);
 let auditLogs = load(STORAGE_KEYS.auditLogs, []);
 let appSettings = load(STORAGE_KEYS.settings, defaultSettings);
@@ -84,6 +94,10 @@ let editingProductId = "";
 let editingIntegrationSaleId = "";
 let showAllSalesDates = false;
 let returnToSettlementAfterCashMovement = false;
+let lastAuthorizationCheckAt = 0;
+let authorizationRefreshInFlight = false;
+let pendingSyncPromise = null;
+let cloudDataLoadPromise = null;
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -317,16 +331,92 @@ const els = {
 };
 
 function load(key, fallback) {
+  let raw = null;
   try {
-    const raw = localStorage.getItem(key);
+    raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : structuredClone(fallback);
-  } catch {
+  } catch (error) {
+    const recoveryKey = `${key}.corrupt-${Date.now()}`;
+    let preserved = false;
+    if (raw) {
+      try {
+        localStorage.setItem(recoveryKey, raw);
+        localStorage.removeItem(key);
+        preserved = true;
+      } catch {
+        protectedCorruptStorageKeys.add(key);
+      }
+    }
+    storageReadIssues.push({ key, recoveryKey: preserved ? recoveryKey : "", raw: preserved ? "" : (raw || ""), message: error.message });
     return structuredClone(fallback);
   }
 }
 
+function reportStorageError(error) {
+  lastStorageWriteError = error?.message || "本机储存无法写入";
+  console.error("Local storage write failed", error);
+  setTimeout(() => {
+    updateCloudStatus("本机储存失败，请立即导出备份");
+    if (!storageErrorAlertShown) {
+      storageErrorAlertShown = true;
+      alert("本机储存空间不足或无法写入。系统没有覆盖原资料，请立即导出完整备份并释放浏览器空间。");
+    }
+  }, 0);
+}
+
 function save(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
+  if (protectedCorruptStorageKeys.has(key)) {
+    reportStorageError(new Error(`${key} 含有尚未保存的损坏原始资料`));
+    return false;
+  }
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (error) {
+    reportStorageError(error);
+    return false;
+  }
+}
+
+function saveStorageBatch(entries, { allowProtected = false } = {}) {
+  const originals = new Map();
+  try {
+    const prepared = entries.map(([key, value]) => [key, JSON.stringify(value)]);
+    for (const [key] of entries) originals.set(key, localStorage.getItem(key));
+    for (const [key, serialized] of prepared) {
+      if (!allowProtected && protectedCorruptStorageKeys.has(key)) throw new Error(`${key} 含有尚未保存的损坏原始资料`);
+      localStorage.setItem(key, serialized);
+    }
+    if (allowProtected) {
+      for (const [key] of entries) protectedCorruptStorageKeys.delete(key);
+    }
+    return true;
+  } catch (error) {
+    for (const [key, original] of originals) {
+      try {
+        if (original === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, original);
+      } catch (rollbackError) {
+        console.error(`Storage rollback failed: ${key}`, rollbackError);
+      }
+    }
+    reportStorageError(error);
+    return false;
+  }
+}
+
+function getStorageRecoveryEntries() {
+  const entries = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key?.includes(".corrupt-")) continue;
+    entries.push({ key, raw: localStorage.getItem(key) || "" });
+  }
+  for (const issue of storageReadIssues) {
+    if (!issue.raw || entries.some((entry) => entry.key === issue.key)) continue;
+    entries.push({ key: issue.key, raw: issue.raw, error: issue.message });
+  }
+  return entries;
 }
 
 function normalizeSaleExternalReferences(sale = {}) {
@@ -361,14 +451,40 @@ function normalizeSaleExternalReferences(sale = {}) {
   };
 }
 
+function getInventoryReviewStatus(sale) {
+  return sale?.inventoryReview?.status || "none";
+}
+
+function requiresInventoryReview(sale) {
+  return getInventoryReviewStatus(sale) === "required";
+}
+
+function getInventoryConflictSummary(sale) {
+  const conflicts = Array.isArray(sale?.inventoryReview?.conflicts) ? sale.inventoryReview.conflicts : [];
+  if (!conflicts.length) return "云端库存与离线销售不一致";
+  return conflicts.map((conflict) => {
+    const cloudStock = conflict.cloudStock === null || conflict.cloudStock === undefined
+      ? "云端无商品"
+      : `云端 ${conflict.cloudStock}`;
+    return `${conflict.productName || conflict.productId}：需 ${conflict.requestedQty || 0}，${cloudStock}`;
+  }).join("；");
+}
+
 function hasCloud() {
   return Boolean(window.cloudPOS);
 }
 
 function updateCloudStatus(text, ok = false) {
-  const pendingCount = pendingSales.length + pendingSaleUpdates.length + pendingProducts.length + pendingStockAdjustments.length + pendingAuditLogs.length;
+  const pendingCount = pendingSales.length
+    + pendingSaleUpdates.length
+    + pendingProducts.length
+    + pendingStockAdjustments.length
+    + pendingAuditLogs.length
+    + getPendingManagementCount();
   const pendingText = pendingCount ? ` · 待同步 ${pendingCount}` : "";
-  els.cloudStatus.textContent = `${text}${pendingText}`;
+  const inventoryReviewCount = sales.filter(requiresInventoryReview).length;
+  const reviewText = inventoryReviewCount ? ` · 库存待复核 ${inventoryReviewCount}` : "";
+  els.cloudStatus.textContent = `${text}${pendingText}${reviewText}`;
   els.cloudStatus.style.color = ok ? "#0f766e" : "#66756f";
 }
 
@@ -389,11 +505,37 @@ function queuePendingSale(sale) {
   updateCloudStatus("订单待同步");
 }
 
-function markSaleSynced(saleId) {
+function markSaleSynced(saleId, patch = {}) {
   pendingSales = pendingSales.filter((sale) => sale.id !== saleId);
   savePendingSales();
-  sales = sales.map((sale) => sale.id === saleId ? { ...sale, syncStatus: "synced" } : sale);
+  sales = sales.map((sale) => sale.id === saleId ? { ...sale, syncStatus: "synced", ...patch } : sale);
   save(STORAGE_KEYS.sales, sales);
+}
+
+function applyCheckoutSyncResult(saleId, result) {
+  if (result?.status !== "inventory-review") {
+    markSaleSynced(saleId);
+    return false;
+  }
+  const previous = sales.find((sale) => sale.id === saleId);
+  const inventoryReview = result.inventoryReview || {
+    status: "required",
+    detectedAt: new Date().toISOString(),
+    conflicts: []
+  };
+  markSaleSynced(saleId, {
+    syncStatus: "review-required",
+    inventoryReview
+  });
+  if (!requiresInventoryReview(previous)) {
+    writeAuditLog("inventory.conflict.detected", {
+      saleId,
+      branchId: inventoryReview.branchId || previous?.branchId || "hq",
+      conflicts: inventoryReview.conflicts || []
+    });
+  }
+  updateCloudStatus("订单已保存，库存待复核");
+  return true;
 }
 
 function savePendingSaleUpdates() {
@@ -409,11 +551,23 @@ function queuePendingSaleUpdate(sale) {
   updateCloudStatus("订单更新待同步");
 }
 
-function markSaleUpdateSynced(saleId) {
+function markSaleUpdateSynced(saleId, patch = {}) {
   pendingSaleUpdates = pendingSaleUpdates.filter((sale) => sale.id !== saleId);
   savePendingSaleUpdates();
-  sales = sales.map((sale) => sale.id === saleId ? { ...sale, syncStatus: "synced" } : sale);
+  sales = sales.map((sale) => sale.id === saleId ? { ...sale, syncStatus: "synced", ...patch } : sale);
   save(STORAGE_KEYS.sales, sales);
+}
+
+function applyVoidSyncResult(saleId, result) {
+  const reviewRequired = result?.stockStatus === "review-required";
+  markSaleUpdateSynced(saleId, {
+    syncStatus: reviewRequired ? "review-required" : "synced",
+    ...(result && Object.hasOwn(result, "inventoryReview")
+      ? { inventoryReview: result.inventoryReview }
+      : {})
+  });
+  updateCloudStatus(reviewRequired ? "订单已作废，退款库存待复核" : "退款与库存已同步", !reviewRequired);
+  return reviewRequired;
 }
 
 function savePendingProducts() {
@@ -462,6 +616,53 @@ function recordStockAdjustment(adjustment) {
 
 function savePendingAuditLogs() {
   save(STORAGE_KEYS.pendingAuditLogs, pendingAuditLogs);
+}
+
+function normalizePendingManagement(value = {}) {
+  return {
+    branches: Array.isArray(value.branches) ? value.branches : [],
+    users: Array.isArray(value.users) ? value.users : [],
+    settings: value.settings && typeof value.settings === "object" ? value.settings : null
+  };
+}
+
+function savePendingManagement() {
+  save(STORAGE_KEYS.pendingManagement, pendingManagement);
+}
+
+function getPendingManagementCount() {
+  return pendingManagement.branches.length
+    + pendingManagement.users.length
+    + (pendingManagement.settings ? 1 : 0);
+}
+
+function queuePendingManagement(type, value) {
+  if (type === "branch") {
+    pendingManagement.branches = [
+      value,
+      ...pendingManagement.branches.filter((item) => item.id !== value.id)
+    ];
+  } else if (type === "user") {
+    pendingManagement.users = [
+      value,
+      ...pendingManagement.users.filter((item) => normalizeEmail(item.email) !== normalizeEmail(value.email))
+    ];
+  } else if (type === "settings") {
+    pendingManagement.settings = value;
+  }
+  savePendingManagement();
+  updateCloudStatus("后台资料待同步");
+}
+
+function markManagementSynced(type, id = "") {
+  if (type === "branch") {
+    pendingManagement.branches = pendingManagement.branches.filter((item) => item.id !== id);
+  } else if (type === "user") {
+    pendingManagement.users = pendingManagement.users.filter((item) => normalizeEmail(item.email) !== normalizeEmail(id));
+  } else if (type === "settings") {
+    pendingManagement.settings = null;
+  }
+  savePendingManagement();
 }
 
 function getCurrentActor() {
@@ -852,6 +1053,7 @@ function getShiftAllSales(shift) {
   const openedAt = new Date(shift.openedAt);
   const closedAt = shift.closedAt ? new Date(shift.closedAt) : new Date();
   return sales.filter((sale) => {
+    if (sale.shiftId) return sale.shiftId === shift.id;
     const createdAt = new Date(sale.createdAt);
     return (sale.branchId || "hq") === shift.branchId && createdAt >= openedAt && createdAt <= closedAt;
   });
@@ -908,7 +1110,9 @@ function getShiftSummary(shift) {
       + pendingSaleUpdates.length
       + pendingProducts.length
       + pendingStockAdjustments.length
-      + pendingAuditLogs.length,
+      + pendingAuditLogs.length
+      + getPendingManagementCount(),
+    inventoryReviewPending: allShiftSales.filter(requiresInventoryReview).length,
     simplePayPending: normalizedReferences.filter((item) => item.simplePayStatus === "pending").length,
     affiliatePending: normalizedReferences.filter((item) => item.affiliateStatus === "pending").length
   };
@@ -1138,6 +1342,7 @@ function openShiftSettlement() {
   if (!navigator.onLine) warnings.push("当前离线，交班资料会保存在本机并等待同步。");
   if (summary.pendingOrderSync) warnings.push(`本班有 ${summary.pendingOrderSync} 笔订单或更新等待同步。`);
   if (summary.pendingSyncTotal > summary.pendingOrderSync) warnings.push(`本机另有 ${summary.pendingSyncTotal - summary.pendingOrderSync} 项库存或审计资料等待同步。`);
+  if (summary.inventoryReviewPending) warnings.push(`${summary.inventoryReviewPending} 笔订单库存待复核。`);
   if (summary.simplePayPending) warnings.push(`${summary.simplePayPending} 笔 SimplePay 付款待确认。`);
   if (summary.affiliatePending) warnings.push(`${summary.affiliatePending} 笔联盟订单待关联。`);
   if (summary.voidedOrders) warnings.push(`${summary.voidedOrders} 笔作废订单，原金额 ${money(summary.voidedTotal)}。`);
@@ -1177,6 +1382,7 @@ function getSettlementReconciliation(shift = currentShift) {
     voidedTotal: summary.voidedTotal,
     pendingOrderSync: summary.pendingOrderSync,
     pendingSyncTotal: summary.pendingSyncTotal,
+    inventoryReviewPending: summary.inventoryReviewPending,
     simplePayPending: summary.simplePayPending,
     affiliatePending: summary.affiliatePending,
     note: els.settlementNote.value.trim(),
@@ -1215,6 +1421,7 @@ function confirmShiftSettlement(event) {
   }
   const hasWarnings = reconciliation.cashDifference !== 0
     || reconciliation.pendingSyncTotal > 0
+    || reconciliation.inventoryReviewPending > 0
     || reconciliation.simplePayPending > 0
     || reconciliation.affiliatePending > 0;
   if (hasWarnings && !confirm("当前结算仍有差额或待处理项目，确定保存并结束班次吗？")) return;
@@ -1308,6 +1515,7 @@ function buildShiftSettlementRows(shift, reconciliation = shift?.reconciliation)
     ["风险提醒"],
     ["本班待同步订单", reconciliation?.pendingOrderSync ?? summary.pendingOrderSync ?? 0],
     ["本机全部待同步", reconciliation?.pendingSyncTotal ?? summary.pendingSyncTotal ?? 0],
+    ["库存待复核", reconciliation?.inventoryReviewPending ?? summary.inventoryReviewPending ?? 0],
     ["SimplePay 待确认", reconciliation?.simplePayPending ?? summary.simplePayPending ?? 0],
     ["联盟待关联", reconciliation?.affiliatePending ?? summary.affiliatePending ?? 0]
   );
@@ -1341,6 +1549,7 @@ function exportCurrentShiftSettlement(shift = currentShift) {
       voidedTotal: summary.voidedTotal || 0,
       pendingOrderSync: summary.pendingOrderSync || 0,
       pendingSyncTotal: summary.pendingSyncTotal || 0,
+      inventoryReviewPending: summary.inventoryReviewPending || 0,
       simplePayPending: summary.simplePayPending || 0,
       affiliatePending: summary.affiliatePending || 0,
       note: els.settlementNote.value.trim()
@@ -1359,6 +1568,7 @@ function exportCurrentShiftSettlement(shift = currentShift) {
       voidedTotal: summary.voidedTotal || 0,
       pendingOrderSync: summary.pendingOrderSync || 0,
       pendingSyncTotal: summary.pendingSyncTotal || 0,
+      inventoryReviewPending: summary.inventoryReviewPending || 0,
       simplePayPending: summary.simplePayPending || 0,
       affiliatePending: summary.affiliatePending || 0,
       note: "旧版交班记录，未保存现金实点"
@@ -1417,6 +1627,9 @@ function renderOperatorAccess() {
       ? "联网时请使用 Google 登录；离线密码由管理员在「设置 > 授权 POS 用户」设置。"
       : "当前离线：请输入授权邮箱和离线密码。密码由管理员在「设置 > 授权 POS 用户」设置。";
   }
+  if (currentCloudUser && lastAuthorizationCheckAt) {
+    els.operatorMessage.textContent += ` 云端授权已于 ${new Date(lastAuthorizationCheckAt).toLocaleTimeString()} 核对。`;
+  }
 }
 
 function requireOperator() {
@@ -1473,6 +1686,127 @@ function logoutCloudIfReady() {
   }
 }
 
+function isCloudAuthorizationValid(appUser) {
+  return Boolean(appUser && appUser.active !== false);
+}
+
+function shouldRefreshCloudAuthorization(force = false, now = Date.now()) {
+  if (force) return true;
+  return !lastAuthorizationCheckAt
+    || now - lastAuthorizationCheckAt >= AUTHORIZATION_REFRESH_INTERVAL_MS;
+}
+
+function cacheCloudAuthorizedUser(appUser) {
+  const email = normalizeEmail(appUser?.email);
+  if (!email) return null;
+  const existing = authorizedUsers.find((user) => normalizeEmail(user.email) === email);
+  const cachedUser = {
+    ...(existing || {}),
+    ...appUser,
+    id: appUser.id || existing?.id || email,
+    email,
+    active: appUser.active !== false
+  };
+  authorizedUsers = existing
+    ? authorizedUsers.map((user) => normalizeEmail(user.email) === email ? cachedUser : user)
+    : [...authorizedUsers, cachedUser];
+  save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  return cachedUser;
+}
+
+function lockCloudSession(email, reason, markInactive = false) {
+  const normalizedEmail = normalizeEmail(email || currentCloudUser?.email || operatorEmail || adminEmail);
+  if (markInactive && normalizedEmail) {
+    authorizedUsers = authorizedUsers.map((user) =>
+      normalizeEmail(user.email) === normalizedEmail ? { ...user, active: false } : user
+    );
+    save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
+  }
+  writeAuditLog("authorization.session-locked", {
+    email: normalizedEmail,
+    reason,
+    openShiftId: hasOpenShift() ? currentShift.id : ""
+  });
+  adminEmail = "";
+  operatorEmail = "";
+  currentCloudUser = null;
+  cloudSessionActive = false;
+  lastAuthorizationCheckAt = 0;
+  cart = [];
+  localStorage.removeItem(STORAGE_KEYS.adminEmail);
+  localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+  updateCloudStatus(reason);
+  logoutCloudIfReady();
+  renderAll();
+  alert(`${reason}${hasOpenShift() ? "\n\n当前班次和销售资料已保留，请由管理员完成交班。" : ""}`);
+}
+
+function lockOfflineSessionForOnlineVerification() {
+  if (currentCloudUser || (!operatorEmail && !adminEmail)) return false;
+  operatorEmail = "";
+  adminEmail = "";
+  cloudSessionActive = false;
+  lastAuthorizationCheckAt = 0;
+  cart = [];
+  localStorage.removeItem(STORAGE_KEYS.operatorEmail);
+  localStorage.removeItem(STORAGE_KEYS.adminEmail);
+  updateCloudStatus("网络已恢复，等待 Google 重新验证");
+  renderAll();
+  alert(`网络已恢复，请使用 Google 登录重新验证身份。${hasOpenShift() ? "\n\n当前班次已保留，原员工验证后可继续。" : ""}`);
+  return true;
+}
+
+function applyRefreshedAuthorization(appUser) {
+  if (!isCloudAuthorizationValid(appUser)) {
+    lockCloudSession(currentCloudUser?.email, "账号已被停用或取消授权，POS 已自动退出。", true);
+    return false;
+  }
+  const cachedUser = cacheCloudAuthorizedUser(appUser);
+  if (cachedUser.role !== "admin" && hasOpenShift() && !isShiftIdentity(cachedUser.email, cachedUser.branchId || "hq")) {
+    lockCloudSession(cachedUser.email, "员工授权分行已经变更，当前班次已锁定。");
+    return false;
+  }
+  const previousBranchId = currentBranchId;
+  currentCloudUser = cachedUser;
+  cloudSessionActive = true;
+  operatorEmail = cachedUser.email;
+  localStorage.setItem(STORAGE_KEYS.operatorEmail, operatorEmail);
+  if (cachedUser.role === "admin") {
+    adminEmail = cachedUser.email;
+    localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
+  } else {
+    adminEmail = "";
+    localStorage.removeItem(STORAGE_KEYS.adminEmail);
+    currentBranchId = cachedUser.branchId || "hq";
+    localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
+    if (currentBranchId !== previousBranchId) cart = [];
+  }
+  updateCloudStatus(`授权已核对：${cachedUser.email}`, true);
+  renderAll();
+  return true;
+}
+
+async function refreshCloudAuthorization({ force = false } = {}) {
+  if (!navigator.onLine || !hasCloud() || !currentCloudUser || !window.cloudPOS.refreshAuthorization) return true;
+  if (authorizationRefreshInFlight || !shouldRefreshCloudAuthorization(force)) return true;
+  authorizationRefreshInFlight = true;
+  try {
+    const result = await window.cloudPOS.refreshAuthorization();
+    lastAuthorizationCheckAt = Date.now();
+    if (!isCloudAuthorizationValid(result?.appUser)) {
+      lockCloudSession(result?.firebaseUser?.email || currentCloudUser?.email, "账号已被停用或取消授权，POS 已自动退出。", true);
+      return false;
+    }
+    return applyRefreshedAuthorization(result.appUser);
+  } catch (error) {
+    updateCloudStatus(`授权核对暂时失败：${getErrorMessage(error)}`);
+    console.warn("Authorization refresh failed", error);
+    return true;
+  } finally {
+    authorizationRefreshInFlight = false;
+  }
+}
+
 function logoutOperator() {
   if (currentShift && !currentShift.closedAt && !confirm("当前班次尚未结束。退出后班次会保留，只有原员工重新登录或管理员交班后才能继续。确定退出吗？")) return;
   operatorEmail = "";
@@ -1502,16 +1836,24 @@ async function syncSaleToCloud(sale) {
     return { ok: false, queued: true };
   }
   try {
+    let result;
     if (isSaleVoided(sale)) {
-      await window.cloudPOS.saveSale(sale);
+      if (!window.cloudPOS.saveVoid) throw new Error("退款事务模块尚未加载");
+      result = await window.cloudPOS.saveVoid(sale);
     } else if (window.cloudPOS.saveCheckout) {
-      await window.cloudPOS.saveCheckout(sale);
+      result = await window.cloudPOS.saveCheckout(sale);
     } else {
       await window.cloudPOS.saveSale(sale);
     }
-    markSaleSynced(sale.id);
-    updateCloudStatus("云端已同步", true);
-    return { ok: true, queued: false };
+    if (isSaleVoided(sale) && window.cloudPOS.saveVoid) {
+      pendingSales = pendingSales.filter((item) => item.id !== sale.id);
+      savePendingSales();
+      applyVoidSyncResult(sale.id, result);
+      return { ok: true, queued: false, inventoryReview: result?.stockStatus === "review-required" };
+    }
+    const inventoryReview = applyCheckoutSyncResult(sale.id, result);
+    if (!inventoryReview) updateCloudStatus("云端已同步", true);
+    return { ok: true, queued: false, inventoryReview };
   } catch (error) {
     updateCloudStatus("云端同步失败");
     console.warn("Cloud sync failed", error);
@@ -1528,21 +1870,30 @@ async function syncPendingSales() {
   updateCloudStatus(`正在补传 ${pendingSales.length} 单`);
   for (const sale of [...pendingSales].reverse()) {
     try {
+      let result;
       if (isSaleVoided(sale)) {
-        await window.cloudPOS.saveSale(sale);
+        if (!window.cloudPOS.saveVoid) throw new Error("退款事务模块尚未加载");
+        result = await window.cloudPOS.saveVoid(sale);
       } else if (window.cloudPOS.saveCheckout) {
-        await window.cloudPOS.saveCheckout(sale);
+        result = await window.cloudPOS.saveCheckout(sale);
       } else {
         await window.cloudPOS.saveSale(sale);
       }
-      markSaleSynced(sale.id);
+      if (isSaleVoided(sale) && window.cloudPOS.saveVoid) {
+        pendingSales = pendingSales.filter((item) => item.id !== sale.id);
+        savePendingSales();
+        applyVoidSyncResult(sale.id, result);
+      } else {
+        applyCheckoutSyncResult(sale.id, result);
+      }
     } catch (error) {
       updateCloudStatus("部分订单待同步");
       console.warn("Pending sale sync failed", error);
       return;
     }
   }
-  updateCloudStatus("离线订单已同步", true);
+  const reviewCount = sales.filter(requiresInventoryReview).length;
+  updateCloudStatus(reviewCount ? `离线订单已同步 · ${reviewCount} 单库存待复核` : "离线订单已同步", true);
 }
 
 async function syncPendingSaleUpdates() {
@@ -1550,8 +1901,14 @@ async function syncPendingSaleUpdates() {
   updateCloudStatus(`正在补传 ${pendingSaleUpdates.length} 个订单更新`);
   for (const sale of [...pendingSaleUpdates].reverse()) {
     try {
-      await window.cloudPOS.saveSale(sale);
-      markSaleUpdateSynced(sale.id);
+      if (isSaleVoided(sale)) {
+        if (!window.cloudPOS.saveVoid) throw new Error("退款事务模块尚未加载");
+        const result = await window.cloudPOS.saveVoid(sale);
+        applyVoidSyncResult(sale.id, result);
+      } else {
+        await window.cloudPOS.saveSale(sale);
+        markSaleUpdateSynced(sale.id);
+      }
     } catch (error) {
       updateCloudStatus("部分订单更新待同步");
       console.warn("Pending sale update sync failed", error);
@@ -1645,12 +2002,74 @@ async function syncPendingAuditLogs() {
   updateCloudStatus("审计记录已同步", true);
 }
 
+async function syncManagementToCloud(type, value) {
+  queuePendingManagement(type, value);
+  if (!hasCloud() || !navigator.onLine || !isCloudAdmin()) return false;
+  try {
+    if (type === "branch") await window.cloudPOS.saveBranch(value);
+    if (type === "user") await window.cloudPOS.saveAuthorizedUser(value);
+    if (type === "settings") await window.cloudPOS.saveSettings(value);
+    markManagementSynced(type, type === "branch" ? value.id : value.email);
+    updateCloudStatus("后台资料已同步", true);
+    return true;
+  } catch (error) {
+    updateCloudStatus("后台资料待同步");
+    console.warn(`Management ${type} sync failed`, error);
+    return false;
+  }
+}
+
+async function syncPendingManagementChanges() {
+  if (!getPendingManagementCount() || !hasCloud() || !navigator.onLine || !isCloudAdmin()) return;
+  updateCloudStatus(`正在补传 ${getPendingManagementCount()} 项后台资料`);
+  for (const branch of [...pendingManagement.branches].reverse()) {
+    try {
+      await window.cloudPOS.saveBranch(branch);
+      markManagementSynced("branch", branch.id);
+    } catch (error) {
+      console.warn("Pending branch sync failed", error);
+      updateCloudStatus("部分后台资料待同步");
+      return;
+    }
+  }
+  for (const user of [...pendingManagement.users].reverse()) {
+    try {
+      await window.cloudPOS.saveAuthorizedUser(user);
+      markManagementSynced("user", user.email);
+    } catch (error) {
+      console.warn("Pending user sync failed", error);
+      updateCloudStatus("部分后台资料待同步");
+      return;
+    }
+  }
+  if (pendingManagement.settings) {
+    try {
+      await window.cloudPOS.saveSettings(pendingManagement.settings);
+      markManagementSynced("settings");
+    } catch (error) {
+      console.warn("Pending settings sync failed", error);
+      updateCloudStatus("部分后台资料待同步");
+      return;
+    }
+  }
+  updateCloudStatus("后台资料已同步", true);
+}
+
 async function syncPendingChanges() {
-  await syncPendingProducts();
-  await syncPendingStockAdjustments();
-  await syncPendingAuditLogs();
-  await syncPendingSales();
-  await syncPendingSaleUpdates();
+  if (pendingSyncPromise) return pendingSyncPromise;
+  pendingSyncPromise = (async () => {
+    await syncPendingManagementChanges();
+    await syncPendingProducts();
+    await syncPendingStockAdjustments();
+    await syncPendingAuditLogs();
+    await syncPendingSales();
+    await syncPendingSaleUpdates();
+  })();
+  try {
+    return await pendingSyncPromise;
+  } finally {
+    pendingSyncPromise = null;
+  }
 }
 
 async function initializeCloudData() {
@@ -1678,6 +2097,8 @@ async function initializeCloudData() {
       users: authorizedUsers.length,
       products: products.length
     });
+    pendingManagement = normalizePendingManagement();
+    savePendingManagement();
     updateCloudStatus("云端初始化完成", true);
     alert("云端数据初始化完成。");
   } catch (error) {
@@ -1705,14 +2126,64 @@ function normalizeCloudTimelineItems(items) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
-async function loadCloudData() {
+function mergeCloudBranchesWithPending(cloudBranches) {
+  const pendingById = new Map(pendingManagement.branches.map((branch) => [branch.id, branch]));
+  const merged = cloudBranches.map((branch) => pendingById.get(branch.id) || branch);
+  for (const branch of pendingManagement.branches) {
+    if (!merged.some((item) => item.id === branch.id)) merged.push(branch);
+  }
+  return merged;
+}
+
+function mergeCloudUsersWithPending(cloudUsers) {
+  const pendingByEmail = new Map(
+    pendingManagement.users.map((user) => [normalizeEmail(user.email), user])
+  );
+  const merged = cloudUsers
+    .filter((user) => user.active !== false || pendingByEmail.has(normalizeEmail(user.email)))
+    .map((user) => pendingByEmail.get(normalizeEmail(user.email)) || user);
+  for (const user of pendingManagement.users) {
+    if (!merged.some((item) => normalizeEmail(item.email) === normalizeEmail(user.email))) merged.push(user);
+  }
+  return merged;
+}
+
+function mergeCloudProductsWithPending(cloudProducts) {
+  const localById = new Map(products.map((product) => [product.id, product]));
+  const pendingProductById = new Map(pendingProducts.map((product) => [product.id, product]));
+  const protectedBranchesByProduct = new Map();
+  for (const sale of pendingSales) {
+    for (const item of sale.items || []) {
+      const branchIds = protectedBranchesByProduct.get(item.id) || new Set();
+      branchIds.add(sale.branchId || "hq");
+      protectedBranchesByProduct.set(item.id, branchIds);
+    }
+  }
+  const merged = cloudProducts.map((cloudProduct) => {
+    if (pendingProductById.has(cloudProduct.id)) return pendingProductById.get(cloudProduct.id);
+    const localProduct = localById.get(cloudProduct.id);
+    const protectedBranches = protectedBranchesByProduct.get(cloudProduct.id);
+    if (!localProduct || !protectedBranches?.size) return cloudProduct;
+    let mergedProduct = normalizeProductBranches(cloudProduct);
+    for (const branchId of protectedBranches) {
+      mergedProduct = setBranchStock(mergedProduct, branchId, getBranchStock(localProduct, branchId));
+    }
+    return mergedProduct;
+  });
+  for (const pendingProduct of pendingProducts) {
+    if (!merged.some((product) => product.id === pendingProduct.id)) merged.push(pendingProduct);
+  }
+  return merged;
+}
+
+async function loadCloudDataOnce() {
   if (!hasCloud() || !navigator.onLine) return false;
   try {
     updateCloudStatus("正在读取云端资料");
     const data = await window.cloudPOS.loadUserData(getActiveCashier());
     try {
       const cloudSettings = await window.cloudPOS.loadSettings();
-      if (cloudSettings) {
+      if (cloudSettings && !pendingManagement.settings) {
         appSettings = { ...appSettings, ...cloudSettings };
         save(STORAGE_KEYS.settings, appSettings);
       }
@@ -1720,15 +2191,19 @@ async function loadCloudData() {
       console.warn("Cloud settings load skipped", settingsError);
     }
     if (data.branches.length) {
-      branches = data.branches.filter((branch) => branch.active !== false);
+      branches = mergeCloudBranchesWithPending(
+        data.branches.filter((branch) => branch.active !== false)
+      );
       save(STORAGE_KEYS.branches, branches);
     }
     if (data.users.length) {
-      authorizedUsers = data.users.filter((user) => user.active !== false);
+      authorizedUsers = mergeCloudUsersWithPending(data.users);
       save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
     }
     if (data.products.length) {
-      products = data.products.filter((product) => product.active !== false);
+      products = mergeCloudProductsWithPending(
+        data.products.filter((product) => product.active !== false)
+      );
       save(STORAGE_KEYS.products, products);
     }
     if (data.sales.length) {
@@ -1766,6 +2241,21 @@ async function loadCloudData() {
   }
 }
 
+async function loadCloudData() {
+  if (cloudDataLoadPromise) return cloudDataLoadPromise;
+  cloudDataLoadPromise = loadCloudDataOnce();
+  try {
+    return await cloudDataLoadPromise;
+  } finally {
+    cloudDataLoadPromise = null;
+  }
+}
+
+async function syncThenLoadCloudData() {
+  await syncPendingChanges();
+  return loadCloudData();
+}
+
 async function saveSettings(event) {
   event.preventDefault();
   if (!requireAdmin()) return;
@@ -1777,39 +2267,28 @@ async function saveSettings(event) {
     receiptFooter: els.receiptFooterInput.value.trim()
   };
   save(STORAGE_KEYS.settings, appSettings);
-  if (hasCloud()) {
-    window.cloudPOS.saveSettings(appSettings).catch((error) => console.warn("Settings cloud sync failed", error));
-  }
+  syncManagementToCloud("settings", appSettings);
   writeAuditLog("settings.update", { settings: appSettings });
   renderAll();
 }
 
-function applyCloudUser(appUser) {
-  if (!appUser || appUser.active === false) {
-    updateCloudStatus("邮箱未授权");
+async function applyCloudUser(appUser, firebaseUser = null) {
+  if (!isCloudAuthorizationValid(appUser)) {
+    lockCloudSession(firebaseUser?.email, "此 Google 邮箱未获授权或已被停用，POS 已自动退出。", true);
     return;
   }
 
+  lastAuthorizationCheckAt = Date.now();
+  appUser = cacheCloudAuthorizedUser(appUser);
+  const previousBranchId = currentBranchId;
   const targetBranchId = appUser.role === "admin" ? currentBranchId : (appUser.branchId || "hq");
   if (appUser.role !== "admin" && hasOpenShift() && !isShiftIdentity(appUser.email, targetBranchId)) {
-    updateCloudStatus("当前设备仍有其他员工的进行中班次");
-    alert(`当前班次属于 ${getCurrentShiftLabel()}，不能改由其他员工接手。请原员工登录，或请管理员交班。`);
-    logoutCloudIfReady();
+    lockCloudSession(appUser.email, `当前班次属于 ${getCurrentShiftLabel()}，不能改由其他员工接手。`);
     return;
   }
 
   cloudSessionActive = true;
   currentCloudUser = appUser;
-  if (!authorizedUsers.some((user) => normalizeEmail(user.email) === normalizeEmail(appUser.email))) {
-    authorizedUsers.push({
-      id: appUser.id || appUser.email,
-      name: appUser.name || appUser.email,
-      email: appUser.email,
-      branchId: appUser.branchId || "hq",
-      role: appUser.role || "POS用户"
-    });
-    save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
-  }
 
   if (appUser.role === "admin") {
     adminEmail = normalizeEmail(appUser.email);
@@ -1817,7 +2296,10 @@ function applyCloudUser(appUser) {
     localStorage.setItem(STORAGE_KEYS.adminEmail, adminEmail);
     currentBranchId = branches.some((branch) => branch.id === currentBranchId) ? currentBranchId : "hq";
   } else {
+    adminEmail = "";
+    localStorage.removeItem(STORAGE_KEYS.adminEmail);
     currentBranchId = appUser.branchId || "hq";
+    if (currentBranchId !== previousBranchId) cart = [];
   }
 
   operatorEmail = appUser.email;
@@ -1825,9 +2307,10 @@ function applyCloudUser(appUser) {
   localStorage.setItem(STORAGE_KEYS.branchId, currentBranchId);
   if (!hasOpenShift() || isShiftIdentity(appUser.email, currentBranchId)) ensureCurrentShift();
   updateCloudStatus(`云端已登录：${appUser.email}`, true);
-  loadCloudData();
-  syncPendingChanges();
   renderAll();
+  const sessionEmail = normalizeEmail(appUser.email);
+  await syncPendingChanges();
+  if (normalizeEmail(currentCloudUser?.email) === sessionEmail) await loadCloudData();
 }
 
 function requireAdmin() {
@@ -1940,8 +2423,8 @@ function renderManagementLists() {
   syncRow.className = "management-row";
   syncRow.innerHTML = `
     <div>
-      <strong>${pendingSales.length} 单订单、${pendingSaleUpdates.length} 个订单更新、${pendingProducts.length} 个库存、${pendingStockAdjustments.length} 条调整、${pendingAuditLogs.length} 条审计待同步</strong>
-      <small>${pendingSales.length || pendingSaleUpdates.length || pendingProducts.length || pendingStockAdjustments.length || pendingAuditLogs.length ? "恢复网络后会自动补传，也可以手动补传。" : "所有本机变更已处理。"}</small>
+      <strong>${pendingSales.length} 单订单、${pendingSaleUpdates.length} 个订单更新、${pendingProducts.length} 个库存、${pendingStockAdjustments.length} 条调整、${pendingAuditLogs.length} 条审计、${getPendingManagementCount()} 项后台资料待同步</strong>
+      <small>${pendingSales.length || pendingSaleUpdates.length || pendingProducts.length || pendingStockAdjustments.length || pendingAuditLogs.length || getPendingManagementCount() ? "恢复网络并完成对应权限登录后会自动补传，也可以手动补传。" : "所有本机变更已处理。"}</small>
     </div>
   `;
   els.syncOverview.append(syncRow);
@@ -2045,7 +2528,7 @@ function addBranch(event) {
   products = products.map((product) => setBranchStock(product, id, 0));
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.products, products);
-  if (hasCloud()) window.cloudPOS.saveBranch({ id, name }).catch((error) => console.warn("Branch cloud sync failed", error));
+  syncManagementToCloud("branch", { id, name });
   writeAuditLog("branch.create", { id, name });
   els.branchForm.reset();
   renderAll();
@@ -2083,7 +2566,7 @@ async function addAuthorizedUser(event) {
     authorizedUsers.push(user);
   }
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
-  if (hasCloud()) window.cloudPOS.saveAuthorizedUser(user).catch((error) => console.warn("User cloud sync failed", error));
+  syncManagementToCloud("user", user);
   writeAuditLog(existingUser ? "user.update" : "user.authorize", { email: user.email, name: user.name, branchId: user.branchId });
   els.userForm.reset();
   renderAll();
@@ -2099,9 +2582,7 @@ function removeAuthorizedUser(userId) {
   if (!getOperator()) logoutOperator();
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
   if (removedUser && removedUser.role !== "管理员" && removedUser.role !== "admin") {
-    if (hasCloud()) {
-      window.cloudPOS.saveAuthorizedUser({ ...removedUser, active: false }).catch((error) => console.warn("User deactivate sync failed", error));
-    }
+    syncManagementToCloud("user", { ...removedUser, active: false });
     writeAuditLog("user.remove", { email: removedUser.email, name: removedUser.name, branchId: removedUser.branchId });
   }
   renderAll();
@@ -2487,6 +2968,7 @@ function renderIntegrationOverview() {
   ).length;
   const integrityIssues = getIntegrationIssues(activeSales);
   const failedCount = markedFailedCount + integrityIssues.length;
+  const inventoryReviewCount = sales.filter(requiresInventoryReview).length;
   const issueHint = integrityIssues[0]?.message || "在交易记录打开“关联资料”处理";
   els.integrationOverview.innerHTML = `
     <div class="management-row">
@@ -2517,6 +2999,13 @@ function renderIntegrationOverview() {
       </div>
       <span>${failedCount} 笔</span>
     </div>
+    <div class="management-row ${inventoryReviewCount ? "diagnostic-warning" : ""}">
+      <div>
+        <strong>离线库存复核</strong>
+        <small>先读取云端库存并调整，再确认订单复核</small>
+      </div>
+      <span>${inventoryReviewCount} 笔待处理</span>
+    </div>
     <div class="management-row">
       <div>
         <strong>价格来源</strong>
@@ -2527,6 +3016,7 @@ function renderIntegrationOverview() {
     <div class="row-actions integration-review-actions">
       <button class="primary" type="button" data-review-integration="pending">处理待关联</button>
       <button class="ghost" type="button" data-review-integration="failed">查看异常</button>
+      <button class="ghost" type="button" data-review-integration="inventory-review">库存待复核</button>
     </div>
   `;
   for (const button of els.integrationOverview.querySelectorAll("[data-review-integration]")) {
@@ -2566,6 +3056,18 @@ function runLocalDiagnostics() {
   } catch (error) {
     addCheck("本机储存", "error", `无法写入：${error.message}`);
   }
+
+  addCheck(
+    "储存资料完整性",
+    protectedCorruptStorageKeys.size || lastStorageWriteError ? "error" : (storageReadIssues.length ? "warning" : "pass"),
+    lastStorageWriteError
+      ? `最近写入失败：${lastStorageWriteError}`
+      : protectedCorruptStorageKeys.size
+        ? `${protectedCorruptStorageKeys.size} 项损坏原始资料尚未安全备份`
+        : storageReadIssues.length
+          ? `${storageReadIssues.length} 项损坏资料已另存，完整备份会包含恢复附件`
+          : "未发现损坏或写入失败"
+  );
 
   const duplicateBranchIds = duplicateValues(branches, (branch) => branch.id);
   const invalidBranches = branches.filter((branch) => !branch.id || !branch.name);
@@ -2631,11 +3133,21 @@ function runLocalDiagnostics() {
     integrationIssues.length ? `${integrationIssues.length} 个问题；${integrationIssues[0].message}` : "订单参考号未发现重复或缺失"
   );
 
+  const inventoryReviews = sales.filter(requiresInventoryReview);
+  addCheck(
+    "离线库存复核",
+    inventoryReviews.length ? "warning" : "pass",
+    inventoryReviews.length
+      ? `${inventoryReviews.length} 笔订单等待核对；${inventoryReviews[0].id}：${getInventoryConflictSummary(inventoryReviews[0])}`
+      : "没有库存冲突待复核"
+  );
+
   const pendingCount = pendingSales.length
     + pendingSaleUpdates.length
     + pendingProducts.length
     + pendingStockAdjustments.length
-    + pendingAuditLogs.length;
+    + pendingAuditLogs.length
+    + getPendingManagementCount();
   const orphanUpdates = pendingSaleUpdates.filter((pending) =>
     !sales.some((sale) => sale.id === pending.id)
   );
@@ -2759,6 +3271,8 @@ function getSaleStatusText(sale) {
 function getSaleSyncText(sale) {
   if (pendingSales.some((item) => item.id === sale.id)) return "待同步";
   if (pendingSaleUpdates.some((item) => item.id === sale.id)) return "更新待同步";
+  if (requiresInventoryReview(sale)) return "已同步 · 库存待复核";
+  if (getInventoryReviewStatus(sale) === "resolved") return "已同步 · 库存已复核";
   if (sale.syncStatus === "synced") return "已同步";
   if (sale.syncStatus === "queued" || sale.syncStatus === "pending") return "后台同步中";
   return "已处理";
@@ -2816,6 +3330,8 @@ function getIntegrationIssues(source = getActiveSales()) {
 
 function matchesIntegrationFilter(sale, filter, issueSaleIds = new Set()) {
   if (filter === "all") return true;
+  if (filter === "inventory-review") return requiresInventoryReview(sale);
+  if (filter === "inventory-resolved") return getInventoryReviewStatus(sale) === "resolved";
   const references = normalizeSaleExternalReferences(sale).externalReferences;
   if (filter === "pending") {
     return references.simplePayStatus === "pending" || references.affiliateStatus === "pending";
@@ -2847,6 +3363,60 @@ async function syncSaleUpdateToCloud(sale, reason = "订单资料") {
     console.warn(`${reason} sync failed`, error);
     return false;
   }
+}
+
+async function syncVoidToCloud(sale) {
+  if (!pendingSaleUpdates.some((item) => item.id === sale.id)) queuePendingSaleUpdate(sale);
+  if (!hasCloud() || !navigator.onLine || !window.cloudPOS.saveVoid) {
+    updateCloudStatus("退款事务待同步");
+    return false;
+  }
+  try {
+    const result = await window.cloudPOS.saveVoid(sale);
+    applyVoidSyncResult(sale.id, result);
+    return true;
+  } catch (error) {
+    updateCloudStatus("退款待同步");
+    console.warn("Void sale sync failed", error);
+    return false;
+  }
+}
+
+function openInventoryForReview(saleId) {
+  const sale = sales.find((item) => item.id === saleId);
+  if (!sale || !canManageBranch(sale.branchId || "hq")) return;
+  setAppView("inventory");
+  els.inventoryBranchFilter.value = sale.branchId || "hq";
+  renderInventoryOverview();
+}
+
+function resolveInventoryReview(saleId) {
+  const sale = sales.find((item) => item.id === saleId);
+  if (!sale || !requiresInventoryReview(sale) || !canManageBranch(sale.branchId || "hq")) return;
+  if (!confirm(`请先在库存页核对并调整 ${sale.branchName || getBranchName(sale.branchId || "hq")} 的云端库存。\n\n确定已完成订单 ${sale.id} 的库存复核吗？`)) return;
+  const resolvedAt = new Date().toISOString();
+  const resolvedBy = getCurrentActor();
+  const updatedSale = {
+    ...sale,
+    inventoryReview: {
+      ...(sale.inventoryReview || {}),
+      status: "resolved",
+      resolvedAt,
+      resolvedBy,
+      resolution: "manual-stock-review"
+    },
+    syncStatus: "pending-update",
+    updatedAt: resolvedAt
+  };
+  sales = sales.map((item) => item.id === sale.id ? updatedSale : item);
+  save(STORAGE_KEYS.sales, sales);
+  syncSaleUpdateToCloud(updatedSale, "库存复核");
+  writeAuditLog("inventory.conflict.resolved", {
+    saleId: sale.id,
+    branchId: sale.branchId || "hq",
+    conflicts: sale.inventoryReview?.conflicts || []
+  });
+  renderAll();
 }
 
 function openIntegrationEditor(saleId) {
@@ -2990,14 +3560,14 @@ function voidSale(saleId) {
   }
   const voidedAt = new Date().toISOString();
   const actor = getCurrentActor();
-  const changedProducts = [];
-  products = products.map((product) => {
+  const hadInventoryConflict = requiresInventoryReview(sale);
+  const adjustments = [];
+  const nextProducts = products.map((product) => {
     const sold = (sale.items || []).find((item) => item.id === product.id);
     if (!sold) return product;
     const beforeStock = getBranchStock(product, sale.branchId || "hq");
     const afterStock = beforeStock + Number(sold.qty || 0);
     const updatedProduct = setBranchStock(product, sale.branchId || "hq", afterStock);
-    changedProducts.push(updatedProduct);
     const adjustment = {
       id: `VOID${Date.now()}-${product.id}`,
       createdAt: voidedAt,
@@ -3009,41 +3579,75 @@ function voidSale(saleId) {
       beforeStock,
       afterStock,
       delta: Number(sold.qty || 0),
-      reason: `订单作废回补 ${sale.id}`,
+      reason: hadInventoryConflict
+        ? `库存冲突订单作废，本机回补（云端未扣减） ${sale.id}`
+        : `订单作废回补 ${sale.id}`,
+      cloudStockSyncMode: hadInventoryConflict ? "not-required" : "refund-transaction",
       operator: actor
     };
-    recordStockAdjustment(adjustment);
-    syncStockAdjustmentToCloud(adjustment);
+    adjustments.push(adjustment);
     return updatedProduct;
   });
-  sales = sales.map((item) => item.id === saleId ? {
-    ...item,
+  const updatedSale = {
+    ...sale,
     status: "voided",
     voidedAt,
     voidedBy: actor,
+    inventoryReview: hadInventoryConflict ? {
+      ...(sale.inventoryReview || {}),
+      status: "resolved",
+      resolvedAt: voidedAt,
+      resolvedBy: actor,
+      resolution: "order-voided"
+    } : sale.inventoryReview,
     syncStatus: "pending-update"
-  } : item);
-  const updatedSale = sales.find((item) => item.id === saleId);
-  pendingSales = pendingSales.filter((item) => item.id !== saleId);
-  save(STORAGE_KEYS.products, products);
-  save(STORAGE_KEYS.sales, sales);
-  savePendingSales();
-  for (const product of changedProducts) {
-    syncProductToCloud(product);
+  };
+  const nextSales = sales.map((item) => item.id === saleId ? updatedSale : item);
+  const nextPendingSales = pendingSales.filter((item) => item.id !== saleId);
+  const nextPendingSaleUpdates = [
+    updatedSale,
+    ...pendingSaleUpdates.filter((item) => item.id !== saleId)
+  ];
+  const adjustmentIds = new Set(adjustments.map((adjustment) => adjustment.id));
+  const nextStockAdjustments = [
+    ...adjustments,
+    ...stockAdjustments.filter((adjustment) => !adjustmentIds.has(adjustment.id))
+  ].slice(0, 500);
+  const nextPendingStockAdjustments = [
+    ...adjustments,
+    ...pendingStockAdjustments.filter((adjustment) => !adjustmentIds.has(adjustment.id))
+  ];
+  const voidSaved = saveStorageBatch([
+    [STORAGE_KEYS.products, nextProducts],
+    [STORAGE_KEYS.sales, nextSales],
+    [STORAGE_KEYS.pendingSales, nextPendingSales],
+    [STORAGE_KEYS.pendingSaleUpdates, nextPendingSaleUpdates],
+    [STORAGE_KEYS.stockAdjustments, nextStockAdjustments],
+    [STORAGE_KEYS.pendingStockAdjustments, nextPendingStockAdjustments]
+  ]);
+  if (!voidSaved) {
+    alert("退款尚未执行：本机无法安全保存订单与库存，原订单保持正常状态。");
+    return;
   }
-  if (hasCloud() && navigator.onLine) {
-    window.cloudPOS.saveSale(updatedSale).catch((error) => {
-      console.warn("Void sale sync failed", error);
-      queuePendingSaleUpdate(updatedSale);
-    });
-  } else {
-    queuePendingSaleUpdate(updatedSale);
+  products = nextProducts;
+  sales = nextSales;
+  pendingSales = nextPendingSales;
+  pendingSaleUpdates = nextPendingSaleUpdates;
+  stockAdjustments = nextStockAdjustments;
+  pendingStockAdjustments = nextPendingStockAdjustments;
+  for (const adjustment of adjustments) {
+    syncStockAdjustmentToCloud(adjustment);
   }
+  syncVoidToCloud(updatedSale);
   writeAuditLog("sale.void", {
     saleId,
     branchId: sale.branchId || "hq",
-    total: sale.total
+    total: sale.total,
+    inventoryConflictClosed: hadInventoryConflict
   });
+  if (hadInventoryConflict) {
+    alert("订单已作废并恢复本机库存。云端原本没有扣减这笔库存，因此系统不会用本机数量覆盖云端。");
+  }
   renderAll();
 }
 
@@ -3371,14 +3975,30 @@ async function checkout() {
   };
 
   const changedProducts = [];
-  products = products.map((product) => {
-    const sold = cart.find((item) => item.id === product.id);
+  const nextProducts = products.map((product) => {
+    const sold = sale.items.find((item) => item.id === product.id);
     if (!sold) return product;
     const updatedProduct = setBranchStock(product, currentBranchId, getBranchStock(product) - sold.qty);
     changedProducts.push(updatedProduct);
     return updatedProduct;
   });
-  sales.unshift(sale);
+  const nextSales = [sale, ...sales];
+  const nextPendingSales = [
+    { ...sale, syncStatus: "pending" },
+    ...pendingSales.filter((item) => item.id !== sale.id)
+  ];
+  const checkoutSaved = saveStorageBatch([
+    [STORAGE_KEYS.products, nextProducts],
+    [STORAGE_KEYS.sales, nextSales],
+    [STORAGE_KEYS.pendingSales, nextPendingSales]
+  ]);
+  if (!checkoutSaved) {
+    alert("收款尚未完成：本机无法安全保存订单。购物车和库存都没有改变，请先处理浏览器储存空间后重试。");
+    return;
+  }
+  products = nextProducts;
+  sales = nextSales;
+  pendingSales = nextPendingSales;
   cart = [];
   els.customerNameInput.value = "";
   els.customerPhoneInput.value = "";
@@ -3387,8 +4007,6 @@ async function checkout() {
   els.paidInput.value = "";
   els.paymentReferenceInput.value = "";
   autoFillPaid = true;
-  save(STORAGE_KEYS.products, products);
-  save(STORAGE_KEYS.sales, sales);
   if (!hasCloud() || !window.cloudPOS.saveCheckout) {
     for (const product of changedProducts) {
       syncProductToCloud(product);
@@ -3633,10 +4251,16 @@ function renderSales() {
       ${sale.customer?.referralCode ? `<span class="product-meta">联盟推荐码：${escapeHtml(sale.customer.referralCode)}</span>` : ""}
       <span class="product-meta">关联：${escapeHtml(getSaleIntegrationSummary(sale))}</span>
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
+      ${requiresInventoryReview(sale) ? `<div class="settlement-warning"><strong>库存待复核</strong><br>${escapeHtml(getInventoryConflictSummary(sale))}</div>` : ""}
       <button class="ghost" type="button" data-edit-integration>关联资料</button>
+      ${requiresInventoryReview(sale) ? '<button class="ghost" type="button" data-open-inventory-review>前往库存核对</button><button class="primary" type="button" data-resolve-inventory-review>确认库存已复核</button>' : ""}
       ${canVoidSale(sale) ? '<button class="ghost danger" type="button" data-void-sale>退款 / 作废并回补库存</button>' : ""}
     `;
     row.querySelector("[data-edit-integration]").addEventListener("click", () => openIntegrationEditor(sale.id));
+    const inventoryButton = row.querySelector("[data-open-inventory-review]");
+    if (inventoryButton) inventoryButton.addEventListener("click", () => openInventoryForReview(sale.id));
+    const resolveButton = row.querySelector("[data-resolve-inventory-review]");
+    if (resolveButton) resolveButton.addEventListener("click", () => resolveInventoryReview(sale.id));
     const voidButton = row.querySelector("[data-void-sale]");
     if (voidButton) voidButton.addEventListener("click", () => voidSale(sale.id));
     els.salesList.append(row);
@@ -3673,11 +4297,13 @@ function renderDailyPaymentSummary(selectedSales) {
   const references = activeSelectedSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
   const simplePayPending = references.filter((item) => item.simplePayStatus === "pending").length;
   const affiliatePending = references.filter((item) => item.affiliateStatus === "pending").length;
+  const inventoryReviewCount = selectedSales.filter(requiresInventoryReview).length;
   const alerts = [
     voidedSelectedSales.length ? `作废 ${voidedSelectedSales.length} 单（原金额 ${money(voidedSelectedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0))}）` : "",
     pendingOrderCount ? `待同步 ${pendingOrderCount} 单` : "",
     simplePayPending ? `SimplePay 待确认 ${simplePayPending} 单` : "",
-    affiliatePending ? `联盟待关联 ${affiliatePending} 单` : ""
+    affiliatePending ? `联盟待关联 ${affiliatePending} 单` : "",
+    inventoryReviewCount ? `库存待复核 ${inventoryReviewCount} 单` : ""
   ].filter(Boolean);
   if (alerts.length) {
     const row = document.createElement("div");
@@ -3850,7 +4476,7 @@ function exportSales() {
     alert("还没有销售记录可以导出。");
     return;
   }
-  const rows = [["订单号", "外部订单号", "班次号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "时间", "客户姓名", "电话", "联盟推荐码", "付款方式", "付款参考号", "SimplePay参考号", "联盟订单号", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
+  const rows = [["订单号", "外部订单号", "班次号", "状态", "作废时间", "分行", "收银员", "收银员邮箱", "同步状态", "库存复核状态", "库存冲突详情", "库存复核人", "时间", "客户姓名", "电话", "联盟推荐码", "付款方式", "付款参考号", "SimplePay参考号", "联盟订单号", "跟进状态", "跟进更新时间", "计划名称", "服务天数", "计划开始", "计划结束", "商品", "小计", "折扣", "应收", "实收", "找零"]];
   for (const sale of sales) {
     rows.push([
       sale.id,
@@ -3862,6 +4488,9 @@ function exportSales() {
       sale.operator?.name || "",
       sale.operator?.email || "",
       getSaleSyncText(sale),
+      getInventoryReviewStatus(sale),
+      requiresInventoryReview(sale) ? getInventoryConflictSummary(sale) : "",
+      sale.inventoryReview?.resolvedBy?.email || "",
       new Date(sale.createdAt).toLocaleString(),
       sale.customer?.name || "",
       sale.customer?.phone || "",
@@ -3964,6 +4593,7 @@ function exportDailySettlement() {
   const externalReferences = selectedSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
   const simplePayPending = externalReferences.filter((item) => item.simplePayStatus === "pending").length;
   const affiliatePending = externalReferences.filter((item) => item.affiliateStatus === "pending").length;
+  const inventoryReviewCount = dateSales.filter(requiresInventoryReview).length;
   const rows = [["类型", "日期", "付款筛选", "付款方式", "订单数", "有效金额", "订单号", "状态", "时间", "参考号", "客户", "分行", "同步", "外部关联"]];
   for (const item of getPaymentSummaryRows(selectedSales)) {
     rows.push(["付款汇总", selectedDate, paymentFilter === "all" ? "全部付款" : paymentFilter, item.method, item.orders, item.total, "", "", "", "", "", "", "", ""]);
@@ -4008,6 +4638,7 @@ function exportDailySettlement() {
     ["风险汇总", selectedDate, "", "", pendingOrderIds.size, "", "", "待同步订单", "", "", "", "", "", ""],
     ["风险汇总", selectedDate, "", "", simplePayPending, "", "", "SimplePay 待确认", "", "", "", "", "", ""],
     ["风险汇总", selectedDate, "", "", affiliatePending, "", "", "联盟待关联", "", "", "", "", "", ""],
+    ["风险汇总", selectedDate, "", "", inventoryReviewCount, "", "", "库存待复核", "", "", "", "", "", ""],
     ["风险汇总", selectedDate, "", "", voidedSales.length, 0, "", `作废原金额 ${money(voidedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0))}`, "", "", "", "", "", ""]
   );
   const branchSuffix = branchFilter === "all" ? "all-branches" : branchFilter;
@@ -4184,7 +4815,7 @@ function exportShifts() {
     alert("还没有交班记录可以导出。");
     return;
   }
-  const rows = [["班次号", "分行", "操作员", "核对 / 结班人", "结班人邮箱", "开始时间", "结束时间", "订单数", "总金额", "付款汇总", "开班备用金", "现金销售", "其他现金存入", "现金取出", "应有现金", "实点现金", "现金差额", "作废订单", "本机待同步", "SimplePay待确认", "联盟待关联", "交班备注"]];
+  const rows = [["班次号", "分行", "操作员", "核对 / 结班人", "结班人邮箱", "开始时间", "结束时间", "订单数", "总金额", "付款汇总", "开班备用金", "现金销售", "其他现金存入", "现金取出", "应有现金", "实点现金", "现金差额", "作废订单", "本机待同步", "库存待复核", "SimplePay待确认", "联盟待关联", "交班备注"]];
   for (const shift of shifts) {
     const reconciledBy = shift.reconciliation?.reconciledBy || shift.closedBy || {};
     rows.push([
@@ -4207,6 +4838,7 @@ function exportShifts() {
       shift.reconciliation?.cashDifference ?? "",
       shift.reconciliation?.voidedOrders ?? shift.summary?.voidedOrders ?? "",
       shift.reconciliation?.pendingSyncTotal ?? "",
+      shift.reconciliation?.inventoryReviewPending ?? shift.summary?.inventoryReviewPending ?? "",
       shift.reconciliation?.simplePayPending ?? "",
       shift.reconciliation?.affiliatePending ?? "",
       shift.reconciliation?.note || ""
@@ -4218,6 +4850,8 @@ function exportShifts() {
 function exportBackup() {
   if (!requireAdmin()) return;
   const backup = {
+    schemaVersion: 2,
+    appVersion: APP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: appSettings,
     branches,
@@ -4229,10 +4863,12 @@ function exportBackup() {
     pendingProducts,
     pendingStockAdjustments,
     pendingAuditLogs,
+    pendingManagement,
     stockAdjustments,
     auditLogs,
     currentShift,
     shifts,
+    storageRecovery: getStorageRecoveryEntries(),
     preferences: {
       paymentMethod: preferredPaymentMethod
     }
@@ -4246,50 +4882,181 @@ function exportBackup() {
   URL.revokeObjectURL(url);
 }
 
+function validateBackupData(backup) {
+  const issues = [];
+  if (!backup || typeof backup !== "object" || Array.isArray(backup)) {
+    return { ok: false, issues: ["备份根内容不是对象"], summary: null };
+  }
+  for (const field of ["branches", "products", "sales"]) {
+    if (!Array.isArray(backup[field])) issues.push(`${field} 必须是数组`);
+  }
+  if (issues.length) return { ok: false, issues, summary: null };
+
+  const branchIds = new Set();
+  for (const branch of backup.branches) {
+    if (!branch?.id || !branch?.name) {
+      issues.push("存在缺少 ID 或名称的分行");
+      continue;
+    }
+    if (branchIds.has(branch.id)) issues.push(`分行 ID 重复：${branch.id}`);
+    branchIds.add(branch.id);
+  }
+  if (!branchIds.size) issues.push("备份至少需要一个分行");
+
+  const productIds = new Set();
+  for (const product of backup.products) {
+    if (!product?.id || !product?.name || !Number.isFinite(Number(product.price))) {
+      issues.push(`商品资料异常：${product?.id || product?.name || "未知商品"}`);
+      continue;
+    }
+    if (productIds.has(product.id)) issues.push(`商品 ID 重复：${product.id}`);
+    productIds.add(product.id);
+    for (const [branchId, stock] of Object.entries(product.branchStock || {})) {
+      if (!branchIds.has(branchId) || !Number.isFinite(Number(stock)) || Number(stock) < 0) {
+        issues.push(`商品 ${product.name} 的 ${branchId} 库存无效`);
+      }
+    }
+  }
+
+  const saleIds = new Set();
+  for (const sale of backup.sales) {
+    const branchId = sale?.branchId || "hq";
+    if (!sale?.id || !Array.isArray(sale.items) || !Number.isFinite(Number(sale.total))) {
+      issues.push(`订单资料异常：${sale?.id || "未知订单"}`);
+      continue;
+    }
+    if (saleIds.has(sale.id)) issues.push(`订单号重复：${sale.id}`);
+    saleIds.add(sale.id);
+    if (!branchIds.has(branchId)) issues.push(`订单 ${sale.id} 的分行不存在：${branchId}`);
+    if (!sale.createdAt || Number.isNaN(new Date(sale.createdAt).getTime())) issues.push(`订单 ${sale.id} 时间无效`);
+    for (const item of sale.items) {
+      if (!item?.id || !Number.isFinite(Number(item.qty)) || Number(item.qty) <= 0) {
+        issues.push(`订单 ${sale.id} 含有无效商品明细`);
+      }
+    }
+  }
+
+  const users = Array.isArray(backup.authorizedUsers) ? backup.authorizedUsers : [];
+  for (const user of users) {
+    if (!user?.email || !branchIds.has(user.branchId || "hq")) {
+      issues.push(`授权用户资料异常：${user?.email || "未知用户"}`);
+    }
+  }
+  if (backup.currentShift && (!backup.currentShift.id || !branchIds.has(backup.currentShift.branchId || "hq"))) {
+    issues.push("进行中班次资料异常");
+  }
+
+  const pendingCount = [
+    backup.pendingSales,
+    backup.pendingSaleUpdates,
+    backup.pendingProducts,
+    backup.pendingStockAdjustments,
+    backup.pendingAuditLogs
+  ].reduce((count, items) => count + (Array.isArray(items) ? items.length : 0), 0)
+    + (Array.isArray(backup.pendingManagement?.branches) ? backup.pendingManagement.branches.length : 0)
+    + (Array.isArray(backup.pendingManagement?.users) ? backup.pendingManagement.users.length : 0)
+    + (backup.pendingManagement?.settings ? 1 : 0);
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    summary: {
+      exportedAt: backup.exportedAt || "",
+      branches: backup.branches.length,
+      users: users.length,
+      products: backup.products.length,
+      sales: backup.sales.length,
+      shifts: Array.isArray(backup.shifts) ? backup.shifts.length : 0,
+      pendingCount
+    }
+  };
+}
+
+function buildRestoredState(backup) {
+  return {
+    branches: structuredClone(backup.branches),
+    authorizedUsers: structuredClone(Array.isArray(backup.authorizedUsers) ? backup.authorizedUsers : defaultAuthorizedUsers),
+    products: structuredClone(backup.products),
+    sales: backup.sales.map(normalizeSaleExternalReferences),
+    pendingSales: (Array.isArray(backup.pendingSales) ? backup.pendingSales : []).map(normalizeSaleExternalReferences),
+    pendingSaleUpdates: (Array.isArray(backup.pendingSaleUpdates) ? backup.pendingSaleUpdates : []).map(normalizeSaleExternalReferences),
+    pendingProducts: structuredClone(Array.isArray(backup.pendingProducts) ? backup.pendingProducts : []),
+    pendingStockAdjustments: structuredClone(Array.isArray(backup.pendingStockAdjustments) ? backup.pendingStockAdjustments : []),
+    pendingAuditLogs: structuredClone(Array.isArray(backup.pendingAuditLogs) ? backup.pendingAuditLogs : []),
+    pendingManagement: normalizePendingManagement(backup.pendingManagement),
+    stockAdjustments: structuredClone(Array.isArray(backup.stockAdjustments) ? backup.stockAdjustments : []),
+    auditLogs: structuredClone(Array.isArray(backup.auditLogs) ? backup.auditLogs : []),
+    currentShift: backup.currentShift ? structuredClone(backup.currentShift) : null,
+    shifts: structuredClone(Array.isArray(backup.shifts) ? backup.shifts : []),
+    appSettings: { ...defaultSettings, ...(backup.settings || {}) },
+    paymentMethod: backup.preferences?.paymentMethod || preferredPaymentMethod
+  };
+}
+
 function restoreBackupFile(file) {
   if (!requireAdmin()) return;
+  if (file.size > 25 * 1024 * 1024) {
+    alert("备份文件超过 25 MB，已停止读取。请确认选择的是简单POS JSON 备份。");
+    return;
+  }
   const reader = new FileReader();
   reader.addEventListener("load", () => {
     try {
       const backup = JSON.parse(String(reader.result || "{}"));
-      if (!Array.isArray(backup.branches) || !Array.isArray(backup.products) || !Array.isArray(backup.sales)) {
-        alert("备份文件格式不正确。");
+      const validation = validateBackupData(backup);
+      if (!validation.ok) {
+        alert(`备份验证失败，当前资料没有改变：\n\n${validation.issues.slice(0, 8).join("\n")}`);
         return;
       }
-      if (!confirm("确定从备份恢复吗？这会覆盖当前本机数据。")) return;
+      const summary = validation.summary;
+      const exportedAt = summary.exportedAt ? new Date(summary.exportedAt).toLocaleString() : "未知时间";
+      if (!confirm(`备份验证通过。\n\n导出时间：${exportedAt}\n分行：${summary.branches}\n员工：${summary.users}\n商品：${summary.products}\n订单：${summary.sales}\n交班：${summary.shifts}\n待同步：${summary.pendingCount}\n\n确定覆盖当前本机资料吗？`)) return;
 
-      branches = backup.branches;
-      authorizedUsers = Array.isArray(backup.authorizedUsers) ? backup.authorizedUsers : defaultAuthorizedUsers;
-      products = backup.products;
-      sales = backup.sales.map(normalizeSaleExternalReferences);
-      pendingSales = (Array.isArray(backup.pendingSales) ? backup.pendingSales : []).map(normalizeSaleExternalReferences);
-      pendingSaleUpdates = (Array.isArray(backup.pendingSaleUpdates) ? backup.pendingSaleUpdates : []).map(normalizeSaleExternalReferences);
-      pendingProducts = Array.isArray(backup.pendingProducts) ? backup.pendingProducts : [];
-      pendingStockAdjustments = Array.isArray(backup.pendingStockAdjustments) ? backup.pendingStockAdjustments : [];
-      pendingAuditLogs = Array.isArray(backup.pendingAuditLogs) ? backup.pendingAuditLogs : [];
-      stockAdjustments = Array.isArray(backup.stockAdjustments) ? backup.stockAdjustments : [];
-      auditLogs = Array.isArray(backup.auditLogs) ? backup.auditLogs : [];
-      currentShift = backup.currentShift || null;
-      shifts = Array.isArray(backup.shifts) ? backup.shifts : [];
-      appSettings = backup.settings || defaultSettings;
-      preferredPaymentMethod = backup.preferences?.paymentMethod || preferredPaymentMethod;
+      const restored = buildRestoredState(backup);
+      const stored = saveStorageBatch([
+        [STORAGE_KEYS.branches, restored.branches],
+        [STORAGE_KEYS.authorizedUsers, restored.authorizedUsers],
+        [STORAGE_KEYS.products, restored.products],
+        [STORAGE_KEYS.sales, restored.sales],
+        [STORAGE_KEYS.pendingSales, restored.pendingSales],
+        [STORAGE_KEYS.pendingSaleUpdates, restored.pendingSaleUpdates],
+        [STORAGE_KEYS.pendingProducts, restored.pendingProducts],
+        [STORAGE_KEYS.pendingStockAdjustments, restored.pendingStockAdjustments],
+        [STORAGE_KEYS.pendingAuditLogs, restored.pendingAuditLogs],
+        [STORAGE_KEYS.pendingManagement, restored.pendingManagement],
+        [STORAGE_KEYS.stockAdjustments, restored.stockAdjustments],
+        [STORAGE_KEYS.auditLogs, restored.auditLogs],
+        [STORAGE_KEYS.currentShift, restored.currentShift],
+        [STORAGE_KEYS.shifts, restored.shifts],
+        [STORAGE_KEYS.settings, restored.appSettings]
+      ], { allowProtected: true });
+      if (!stored) {
+        alert("恢复未执行：本机无法完整写入备份，原资料已经回滚。");
+        return;
+      }
+
+      branches = restored.branches;
+      authorizedUsers = restored.authorizedUsers;
+      products = restored.products;
+      sales = restored.sales;
+      pendingSales = restored.pendingSales;
+      pendingSaleUpdates = restored.pendingSaleUpdates;
+      pendingProducts = restored.pendingProducts;
+      pendingStockAdjustments = restored.pendingStockAdjustments;
+      pendingAuditLogs = restored.pendingAuditLogs;
+      pendingManagement = restored.pendingManagement;
+      stockAdjustments = restored.stockAdjustments;
+      auditLogs = restored.auditLogs;
+      currentShift = restored.currentShift;
+      shifts = restored.shifts;
+      appSettings = restored.appSettings;
+      preferredPaymentMethod = restored.paymentMethod;
       paymentMethodInitialized = false;
-
-      save(STORAGE_KEYS.branches, branches);
-      save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
-      save(STORAGE_KEYS.products, products);
-      save(STORAGE_KEYS.sales, sales);
-      savePendingSales();
-      savePendingSaleUpdates();
-      savePendingProducts();
-      savePendingStockAdjustments();
-      savePendingAuditLogs();
-      save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
-      save(STORAGE_KEYS.auditLogs, auditLogs);
-      saveCurrentShift();
-      saveShifts();
-      save(STORAGE_KEYS.settings, appSettings);
-      localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
+      try {
+        localStorage.setItem(STORAGE_KEYS.paymentMethod, preferredPaymentMethod);
+      } catch (error) {
+        reportStorageError(error);
+      }
       migrateManagementData();
       migrateProductsForBranches();
       renderAll();
@@ -4346,6 +5113,7 @@ function resetAllData() {
   pendingProducts = [];
   pendingStockAdjustments = [];
   pendingAuditLogs = [];
+  pendingManagement = normalizePendingManagement();
   stockAdjustments = [];
   auditLogs = [];
   currentShift = null;
@@ -4353,6 +5121,7 @@ function resetAllData() {
   savePendingProducts();
   savePendingStockAdjustments();
   savePendingAuditLogs();
+  savePendingManagement();
   save(STORAGE_KEYS.stockAdjustments, stockAdjustments);
   save(STORAGE_KEYS.auditLogs, auditLogs);
   saveCurrentShift();
@@ -4368,7 +5137,7 @@ els.categoryFilter.addEventListener("change", () => {
   renderProducts();
   renderCategoryFilter();
 });
-els.refreshCloudBtn.addEventListener("click", loadCloudData);
+els.refreshCloudBtn.addEventListener("click", syncThenLoadCloudData);
 els.menuToggleBtn.addEventListener("click", () => {
   const open = !els.appMenu.classList.contains("open");
   els.appMenu.classList.toggle("open", open);
@@ -4581,24 +5350,36 @@ window.addEventListener("thermal-printer-status", (event) => {
   updatePrinterStatus(message, state);
   renderPrinterSettings();
 });
-window.addEventListener("online", () => {
+window.addEventListener("online", async () => {
   updateNetworkStatus();
-  syncPendingChanges();
+  if (lockOfflineSessionForOnlineVerification()) return;
+  const authorized = await refreshCloudAuthorization({ force: true });
+  if (authorized) syncThenLoadCloudData();
 });
 window.addEventListener("offline", updateNetworkStatus);
 
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshCloudAuthorization();
+});
+
+setInterval(() => {
+  refreshCloudAuthorization();
+}, AUTHORIZATION_REFRESH_INTERVAL_MS);
+
 window.addEventListener("cloud-ready", (event) => {
   updateCloudStatus(`云端已连接：${event.detail.projectId}`, true);
-  syncPendingChanges();
 });
 
 window.addEventListener("cloud-auth-change", (event) => {
   const { firebaseUser, appUser } = event.detail;
   if (!firebaseUser) {
+    if (navigator.onLine && lockOfflineSessionForOnlineVerification()) return;
     if (cloudSessionActive) {
       adminEmail = "";
       operatorEmail = "";
       currentCloudUser = null;
+      lastAuthorizationCheckAt = 0;
+      cart = [];
       localStorage.removeItem(STORAGE_KEYS.adminEmail);
       localStorage.removeItem(STORAGE_KEYS.operatorEmail);
       cloudSessionActive = false;
@@ -4607,7 +5388,7 @@ window.addEventListener("cloud-auth-change", (event) => {
     renderAll();
     return;
   }
-  applyCloudUser(appUser);
+  applyCloudUser(appUser, firebaseUser);
 });
 
 window.addEventListener("cloud-error", (event) => {

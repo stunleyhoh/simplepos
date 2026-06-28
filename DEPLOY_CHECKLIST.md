@@ -6,6 +6,7 @@
 - 已启用 Authentication 的 Google 登录。
 - 已创建 Firestore Database。
 - 已发布 `firestore.rules`。
+- `v0.68` 起规则已允许订单保存 `inventoryReview`；升级后必须重新发布规则。
 - 已在 Google Cloud 限制 Firebase Web API Key 的 HTTP referrers。
 
 ## 本地文件

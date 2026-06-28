@@ -74,6 +74,7 @@ service cloud.firestore {
             "externalReferences",
             "customer",
             "payment",
+            "inventoryReview",
             "updatedAt",
             "syncedAt"
           ])

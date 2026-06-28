@@ -67,6 +67,19 @@ async function getCloudUser(email) {
   return null;
 }
 
+async function refreshAuthorization() {
+  const firebaseUser = auth.currentUser;
+  if (!firebaseUser) return { firebaseUser: null, appUser: null };
+  const appUser = await getCloudUser(firebaseUser.email);
+  return {
+    firebaseUser: {
+      email: firebaseUser.email,
+      uid: firebaseUser.uid
+    },
+    appUser
+  };
+}
+
 async function loadCollection(name) {
   const snapshot = await getDocs(collection(db, name));
   return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
@@ -178,10 +191,16 @@ async function saveSale(sale) {
 }
 
 async function saveCheckout(sale) {
-  await runTransaction(db, async (transaction) => {
+  return runTransaction(db, async (transaction) => {
     const saleRef = doc(db, "sales", sale.id);
     const existingSale = await transaction.get(saleRef);
-    if (existingSale.exists()) return;
+    if (existingSale.exists()) {
+      const existing = existingSale.data();
+      return {
+        status: existing.inventoryReview?.status === "required" ? "inventory-review" : "already-synced",
+        inventoryReview: existing.inventoryReview || null
+      };
+    }
 
     const productRefs = sale.items.map((item) => doc(db, "products", item.id));
     const snapshots = [];
@@ -189,17 +208,54 @@ async function saveCheckout(sale) {
       snapshots.push(await transaction.get(productRef));
     }
 
+    const conflicts = [];
     snapshots.forEach((snapshot, index) => {
-      if (!snapshot.exists()) {
-        throw new Error(`商品不存在：${sale.items[index].name}`);
-      }
       const item = sale.items[index];
+      if (!snapshot.exists()) {
+        conflicts.push({
+          productId: item.id,
+          productName: item.name,
+          requestedQty: Number(item.qty || 0),
+          cloudStock: null,
+          reason: "云端商品不存在"
+        });
+        return;
+      }
       const product = snapshot.data();
       const branchStock = { ...(product.branchStock || {}) };
       const currentStock = Number(branchStock[sale.branchId] || 0);
       if (currentStock < item.qty) {
-        throw new Error(`${item.name} 库存不足，当前库存 ${currentStock}`);
+        conflicts.push({
+          productId: item.id,
+          productName: item.name,
+          requestedQty: Number(item.qty || 0),
+          cloudStock: currentStock,
+          reason: "云端库存不足"
+        });
       }
+    });
+
+    if (conflicts.length) {
+      const inventoryReview = {
+        status: "required",
+        detectedAt: new Date().toISOString(),
+        branchId: sale.branchId,
+        conflicts
+      };
+      transaction.set(saleRef, {
+        ...sale,
+        inventoryReview,
+        syncStatus: "review-required",
+        syncedAt: serverTimestamp()
+      }, { merge: true });
+      return { status: "inventory-review", inventoryReview };
+    }
+
+    snapshots.forEach((snapshot, index) => {
+      const item = sale.items[index];
+      const product = snapshot.data();
+      const branchStock = { ...(product.branchStock || {}) };
+      const currentStock = Number(branchStock[sale.branchId] || 0);
       branchStock[sale.branchId] = currentStock - item.qty;
       transaction.update(snapshot.ref, {
         branchStock,
@@ -213,6 +269,105 @@ async function saveCheckout(sale) {
       syncStatus: "synced",
       syncedAt: serverTimestamp()
     }, { merge: true });
+    return { status: "synced", inventoryReview: null };
+  });
+}
+
+async function saveVoid(sale) {
+  return runTransaction(db, async (transaction) => {
+    const saleRef = doc(db, "sales", sale.id);
+    const existingSnapshot = await transaction.get(saleRef);
+    if (!existingSnapshot.exists()) {
+      transaction.set(saleRef, {
+        ...sale,
+        syncStatus: "synced",
+        syncedAt: serverTimestamp()
+      }, { merge: true });
+      return {
+        status: "voided",
+        stockStatus: "not-required",
+        inventoryReview: sale.inventoryReview || null
+      };
+    }
+
+    const existingSale = existingSnapshot.data();
+    if (existingSale.status === "voided") {
+      return {
+        status: "already-voided",
+        stockStatus: existingSale.inventoryReview?.status === "required" ? "review-required" : "already-processed",
+        inventoryReview: existingSale.inventoryReview || null
+      };
+    }
+
+    const hadInventoryConflict = existingSale.inventoryReview?.status === "required";
+    const saleItems = Array.isArray(existingSale.items) ? existingSale.items : (sale.items || []);
+    const productSnapshots = [];
+    if (!hadInventoryConflict) {
+      for (const item of saleItems) {
+        productSnapshots.push(await transaction.get(doc(db, "products", item.id)));
+      }
+    }
+
+    const missingProducts = productSnapshots.flatMap((snapshot, index) => {
+      if (snapshot.exists()) return [];
+      const item = saleItems[index];
+      return [{
+        productId: item.id,
+        productName: item.name,
+        requestedQty: Number(item.qty || 0),
+        cloudStock: null,
+        reason: "退款回补时云端商品不存在"
+      }];
+    });
+
+    let inventoryReview = existingSale.inventoryReview || sale.inventoryReview || null;
+    if (hadInventoryConflict) {
+      inventoryReview = {
+        ...inventoryReview,
+        status: "resolved",
+        resolvedAt: sale.voidedAt || new Date().toISOString(),
+        resolvedBy: sale.voidedBy || null,
+        resolution: "order-voided"
+      };
+    } else if (missingProducts.length) {
+      inventoryReview = {
+        status: "required",
+        type: "void-restock",
+        detectedAt: new Date().toISOString(),
+        branchId: existingSale.branchId || sale.branchId,
+        conflicts: missingProducts
+      };
+    } else {
+      productSnapshots.forEach((snapshot, index) => {
+        const item = saleItems[index];
+        const product = snapshot.data();
+        const branchId = existingSale.branchId || sale.branchId;
+        const branchStock = { ...(product.branchStock || {}) };
+        branchStock[branchId] = Number(branchStock[branchId] || 0) + Number(item.qty || 0);
+        transaction.update(snapshot.ref, {
+          branchStock,
+          stock: branchId === "hq" ? branchStock[branchId] : product.stock,
+          updatedAt: serverTimestamp()
+        });
+      });
+    }
+
+    transaction.update(saleRef, {
+      status: "voided",
+      voidedAt: sale.voidedAt || new Date().toISOString(),
+      voidedBy: sale.voidedBy || null,
+      inventoryReview,
+      syncStatus: missingProducts.length ? "review-required" : "synced",
+      updatedAt: serverTimestamp(),
+      syncedAt: serverTimestamp()
+    });
+    return {
+      status: "voided",
+      stockStatus: hadInventoryConflict
+        ? "not-required"
+        : (missingProducts.length ? "review-required" : "restored"),
+      inventoryReview
+    };
   });
 }
 
@@ -230,6 +385,7 @@ window.cloudPOS = {
   signInWithGoogle,
   signOutGoogle,
   getCloudUser,
+  refreshAuthorization,
   loadCollection,
   loadAllData,
   loadUserData,
@@ -241,7 +397,8 @@ window.cloudPOS = {
   saveSettings,
   loadSettings,
   saveSale,
-  saveCheckout
+  saveCheckout,
+  saveVoid
 };
 
 onAuthStateChanged(auth, async (firebaseUser) => {

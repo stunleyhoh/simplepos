@@ -42,6 +42,7 @@ const context = {
     return String(value || "").trim().toLowerCase();
   },
   savedShift: null,
+  sales: [],
   saveCurrentShift() {
     context.savedShift = structuredClone(context.currentShift);
   },
@@ -55,7 +56,8 @@ for (const name of [
   "isCurrentShiftOwner",
   "canManageCurrentShift",
   "getCurrentShiftLabel",
-  "ensureCurrentShift"
+  "ensureCurrentShift",
+  "getShiftAllSales"
 ]) {
   vm.runInContext(extractFunction(name), context);
 }
@@ -97,4 +99,17 @@ assert.equal(context.currentShift.branchId, "bukit-indah");
 context.admin = true;
 assert.equal(context.canManageCurrentShift(), true, "管理员应能处理进行中班次");
 
-console.log("shift-lock.test.js: 6 项班次安全测试通过");
+context.sales = [
+  { id: "A", shiftId: "SHIFT-A", branchId: "bukit-indah", createdAt: "2026-06-28T01:05:00.000Z" },
+  { id: "B", shiftId: "SHIFT-B", branchId: "bukit-indah", createdAt: "2026-06-28T01:06:00.000Z" },
+  { id: "LEGACY", branchId: "bukit-indah", createdAt: "2026-06-28T01:07:00.000Z" }
+];
+const shiftSales = context.getShiftAllSales({
+  id: "SHIFT-A",
+  branchId: "bukit-indah",
+  openedAt: "2026-06-28T01:00:00.000Z",
+  closedAt: "2026-06-28T02:00:00.000Z"
+});
+assert.deepEqual(Array.from(shiftSales, (sale) => sale.id), ["A", "LEGACY"], "班次不能计入其他收银台的订单");
+
+console.log("shift-lock.test.js: 7 项班次安全测试通过");
