@@ -22,7 +22,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.74";
+const APP_VERSION = "v0.76";
 const AUTHORIZATION_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const defaultBranches = [
   { id: "hq", name: "总店" },
@@ -31,9 +31,9 @@ const defaultBranches = [
 ];
 const defaultAuthorizedUsers = [];
 const defaultSettings = {
-  businessName: "简单草本减脂计划",
-  defaultServiceName: "简单草本减脂计划第一阶段",
-  serviceDays: 21,
+  businessName: "简单POS",
+  defaultServiceName: "一般销售",
+  serviceDays: 1,
   lowStockThreshold: 5,
   receiptFooter: "谢谢惠顾"
 };
@@ -50,10 +50,14 @@ let storageErrorAlertShown = false;
 let lastStorageWriteError = "";
 
 const sampleProducts = [
-  { id: createId(), name: "简单草本减脂计划第一阶段", barcode: "SLIM-P1-3W", category: "草本减脂计划", price: 150, stock: 30, branchStock: { hq: 30, "branch-1": 12, "branch-2": 8 } },
-  { id: createId(), name: "第一阶段复购包", barcode: "SLIM-P1-REFILL", category: "草本减脂计划", price: 150, stock: 20, branchStock: { hq: 20, "branch-1": 8, "branch-2": 5 } },
-  { id: createId(), name: "3星期跟进服务", barcode: "SLIM-COACH-3W", category: "服务", price: 0, stock: 99, branchStock: { hq: 99, "branch-1": 99, "branch-2": 99 } }
+  { id: createId(), name: "3星期跟进服务", barcode: "SLIM-COACH-3W", category: "服务", price: 0, stock: 99, branchStock: { hq: 99, "branch-1": 99, "branch-2": 99 } },
+  { id: "affiliate-plan-rm180", name: "简单联盟 RM180 配套", barcode: "AFF-PLAN-RM180", category: "联盟配套", price: 180, stock: 99, branchStock: { hq: 99, "branch-1": 99, "branch-2": 99 }, affiliatePlanId: "plan_rm180" }
 ];
+
+const LEGACY_DEMO_PRODUCT_BARCODES = new Set([
+  "SLIM-P1-3W",
+  "SLIM-P1-REFILL"
+]);
 
 let products = load(STORAGE_KEYS.products, sampleProducts);
 let sales = load(STORAGE_KEYS.sales, []).map(normalizeSaleExternalReferences);
@@ -903,10 +907,28 @@ function getTotalStock() {
 }
 
 function migrateProductsForBranches() {
+  products = products.filter((product) => !isLegacyDemoProduct(product));
+  pendingProducts = pendingProducts.filter((product) => !isLegacyDemoProduct(product));
+  cart = cart.filter((item) => !isLegacyDemoProduct(item));
+  savePendingProducts();
+  const affiliateSample = sampleProducts.find((product) => product.id === "affiliate-plan-rm180");
+  if (affiliateSample && !products.some((product) => product.id === affiliateSample.id)) {
+    const product = normalizeProductBranches(structuredClone(affiliateSample));
+    products.push(product);
+    pendingProducts = [
+      product,
+      ...pendingProducts.filter((item) => item.id !== product.id)
+    ];
+    savePendingProducts();
+  }
   products = products.map((product) => {
     return normalizeProductBranches(product);
   });
   save(STORAGE_KEYS.products, products);
+}
+
+function isLegacyDemoProduct(product = {}) {
+  return LEGACY_DEMO_PRODUCT_BARCODES.has(String(product.barcode || "").trim().toUpperCase());
 }
 
 function cloneSampleProductsForBranches() {
@@ -929,6 +951,20 @@ function migrateSaleExternalReferences() {
 
 function migrateManagementData() {
   appSettings = { ...defaultSettings, ...appSettings };
+  let settingsMigrated = false;
+  if (appSettings.businessName === "简单草本减脂计划") {
+    appSettings.businessName = "简单POS";
+    settingsMigrated = true;
+  }
+  if (appSettings.defaultServiceName === "简单草本减脂计划第一阶段") {
+    appSettings.defaultServiceName = "一般销售";
+    appSettings.serviceDays = 1;
+    settingsMigrated = true;
+  }
+  if (settingsMigrated) {
+    pendingManagement.settings = { ...appSettings };
+    savePendingManagement();
+  }
   if (!branches.length) branches = structuredClone(defaultBranches);
   if (!authorizedUsers.length) authorizedUsers = structuredClone(defaultAuthorizedUsers);
   currentBranchId = resolveBranchId(currentBranchId) || currentBranchId;
@@ -2238,10 +2274,20 @@ async function loadCloudDataOnce() {
       save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
     }
     if (data.products.length) {
+      const legacyCloudProducts = data.products.filter(isLegacyDemoProduct);
       products = mergeCloudProductsWithPending(
-        data.products.filter((product) => product.active !== false)
+        data.products.filter((product) => product.active !== false && !isLegacyDemoProduct(product))
       );
       save(STORAGE_KEYS.products, products);
+      if (legacyCloudProducts.length && isCloudAdmin() && window.cloudPOS.deleteProduct) {
+        await Promise.all(
+          legacyCloudProducts.map((product) => window.cloudPOS.deleteProduct(product.id))
+        );
+        writeAuditLog("products.legacy-demo.delete", {
+          productIds: legacyCloudProducts.map((product) => product.id),
+          barcodes: legacyCloudProducts.map((product) => product.barcode)
+        });
+      }
     }
     if (data.sales.length) {
       const cloudSales = normalizeCloudSales(data.sales);
@@ -3928,6 +3974,10 @@ function addToCart(productId) {
   const product = products.find((item) => item.id === productId);
   const existing = cart.find((item) => item.id === productId);
   const currentQty = existing ? existing.qty : 0;
+  if (product?.affiliatePlanId && currentQty >= 1) {
+    alert("联盟配套每张订单只能选择一个单位；多个单位请分别下单。");
+    return;
+  }
   if (!product || currentQty >= getBranchStock(product)) {
     alert("库存不足，不能继续添加。");
     return;
@@ -3935,7 +3985,16 @@ function addToCart(productId) {
   if (existing) {
     existing.qty += 1;
   } else {
-    cart.push({ id: product.id, name: product.name, price: product.price, qty: 1, branchId: currentBranchId });
+    cart.push({
+      id: product.id,
+      name: product.name,
+      barcode: product.barcode || "",
+      category: product.category || "",
+      affiliatePlanId: product.affiliatePlanId || "",
+      price: product.price,
+      qty: 1,
+      branchId: currentBranchId
+    });
   }
   renderCart();
 }
@@ -4060,6 +4119,7 @@ async function checkout() {
 
   const saleId = createPosOrderId();
   const affiliateReferralCode = els.affiliateReferralCodeInput.value.trim().toUpperCase();
+  const affiliateEligible = Boolean(window.integrationContract?.hasAffiliateItems(cart));
   const sale = attachIntegrationOutbox({
     id: saleId,
     createdAt: createdAt.toISOString(),
@@ -4096,7 +4156,7 @@ async function checkout() {
         : "not-used",
       affiliateReferralCode,
       affiliateOrderId: "",
-      affiliateStatus: affiliateReferralCode ? "pending" : "not-used"
+      affiliateStatus: affiliateReferralCode && affiliateEligible ? "pending" : "not-used"
     },
     syncStatus: navigator.onLine && hasCloud() ? "queued" : "pending"
   }, "checkout");

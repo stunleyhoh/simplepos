@@ -8,6 +8,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -154,6 +155,10 @@ async function saveProduct(product) {
     active: product.active ?? true,
     updatedAt: serverTimestamp()
   }, { merge: true });
+}
+
+async function deleteProduct(productId) {
+  await deleteDoc(doc(db, "products", productId));
 }
 
 async function saveStockAdjustment(adjustment) {
@@ -424,6 +429,7 @@ window.cloudPOS = {
   saveBranch,
   saveAuthorizedUser,
   saveProduct,
+  deleteProduct,
   saveStockAdjustment,
   saveAuditLog,
   saveSettings,

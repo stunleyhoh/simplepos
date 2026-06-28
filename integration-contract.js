@@ -26,6 +26,13 @@
     }));
   }
 
+  function affiliateItems(items = []) {
+    return items.filter((item) =>
+      text(item.affiliatePlanId)
+      || text(item.barcode || item.sku).toUpperCase().startsWith("AFF-PLAN-")
+    );
+  }
+
   function baseJob(sale, operation, target, createdAt) {
     const id = jobId(sale.id, operation);
     return {
@@ -72,17 +79,29 @@
     const referralCode = text(
       references.affiliateReferralCode || customer.referralCode
     ).toUpperCase();
-    if (referralCode) {
+    const eligibleItems = affiliateItems(sale.items);
+    if (referralCode && eligibleItems.length) {
+      const affiliateAmount = money(
+        eligibleItems.reduce(
+          (sum, item) => sum + Number(item.price || 0) * Number(item.qty || item.quantity || 0),
+          0
+        )
+      );
       jobs.push({
         ...baseJob(sale, "affiliate.fulfill", "affiliate", createdAt),
+        amount: {
+          currency: "MYR",
+          value: affiliateAmount
+        },
         action: "create-or-confirm-order",
         blockedBy: paymentJob ? paymentJob.id : "",
         referralCode,
+        planId: text(eligibleItems[0].affiliatePlanId) || "plan_rm180",
         customer: {
           name: text(customer.name),
           phone: text(customer.phone)
         },
-        items: publicItems(sale.items)
+        items: publicItems(eligibleItems)
       });
     }
 
@@ -109,12 +128,14 @@
     const referralCode = text(
       references.affiliateReferralCode || customer.referralCode
     ).toUpperCase();
-    if (referralCode || text(references.affiliateOrderId)) {
+    const eligibleItems = affiliateItems(sale.items);
+    if ((referralCode && eligibleItems.length) || text(references.affiliateOrderId)) {
       jobs.push({
         ...baseJob(sale, "affiliate.reverse", "affiliate", createdAt),
         action: "reverse-order-benefits",
         blockedBy: refundJob ? refundJob.id : "",
         affiliateOrderId: text(references.affiliateOrderId),
+        originalExternalOrderId: jobId(sale.id, "affiliate.fulfill"),
         referralCode,
         reason: "pos-order-voided"
       });
@@ -149,6 +170,9 @@
     SCHEMA_VERSION,
     buildJobs,
     attachJobReferences,
+    hasAffiliateItems(items) {
+      return affiliateItems(items).length > 0;
+    },
     jobId
   };
 

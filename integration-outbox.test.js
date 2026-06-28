@@ -86,7 +86,15 @@ const affiliateSale = sale({
     affiliateReferralCode: "abc123",
     affiliateOrderId: "",
     affiliateStatus: "pending"
-  }
+  },
+  items: [{
+    id: "AFF1",
+    barcode: "AFF-PLAN-RM180",
+    affiliatePlanId: "plan_rm180",
+    name: "Affiliate Package",
+    qty: 1,
+    price: 180
+  }]
 });
 const checkoutJobs = contract.buildJobs(affiliateSale);
 assert.equal(checkoutJobs.length, 2);
@@ -94,12 +102,26 @@ assert.equal(checkoutJobs[1].operation, "affiliate.fulfill");
 assert.equal(checkoutJobs[1].referralCode, "ABC123");
 assert.equal(checkoutJobs[1].blockedBy, checkoutJobs[0].id);
 assert.deepEqual(checkoutJobs[1].items[0], {
-  id: "P1",
-  sku: "PLAN-180",
-  name: "Package",
+  id: "AFF1",
+  sku: "AFF-PLAN-RM180",
+  name: "Affiliate Package",
   quantity: 1,
   unitPrice: 180
 });
+assert.equal(checkoutJobs[1].planId, "plan_rm180");
+assert.equal(checkoutJobs[1].amount.value, 180);
+assert.equal(contract.hasAffiliateItems(affiliateSale.items), true);
+assert.equal(contract.hasAffiliateItems(sale().items), false);
+
+const referralOnlyJobs = contract.buildJobs(sale({
+  customer: { name: "User", phone: "012", referralCode: "ABC123" },
+  externalReferences: {
+    simplePayStatus: "not-used",
+    affiliateReferralCode: "ABC123",
+    affiliateStatus: "pending"
+  }
+}));
+assert.deepEqual(referralOnlyJobs, []);
 
 const repeatedJobs = contract.buildJobs(affiliateSale);
 assert.deepEqual(
@@ -127,6 +149,10 @@ assert.equal(voidJobs[0].originalPaymentReference, "SP-123");
 assert.equal(voidJobs[1].operation, "affiliate.reverse");
 assert.equal(voidJobs[1].affiliateOrderId, "AFF-123");
 assert.equal(voidJobs[1].blockedBy, voidJobs[0].id);
+assert.equal(
+  voidJobs[1].originalExternalOrderId,
+  contract.jobId(voidedSale.id, "affiliate.fulfill")
+);
 
 const attachedVoid = contract.attachJobReferences(voidedSale, "void");
 assert.equal(attachedVoid.integrationOutbox.checkoutJobIds.length, 2);
@@ -144,6 +170,9 @@ assert.match(rulesSource, /match \/integrationJobs\/\{jobId\}/);
 assert.match(rulesSource, /request\.resource\.data\.status == "pending"/);
 assert.match(appSource, /attachIntegrationOutbox\(\{/);
 assert.match(htmlSource, /integration-contract\.js/);
-assert.match(swSource, /simple-pos-v86/);
+assert.match(swSource, /simple-pos-v88/);
+assert.doesNotMatch(appSource, /price:\s*150/);
+assert.match(appSource, /LEGACY_DEMO_PRODUCT_BARCODES/);
+assert.match(cloudSource, /async function deleteProduct\(/);
 
 console.log("integration-outbox.test.js: 35 integration outbox assertions passed");
