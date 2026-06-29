@@ -158,6 +158,28 @@ const attachedVoid = contract.attachJobReferences(voidedSale, "void");
 assert.equal(attachedVoid.integrationOutbox.checkoutJobIds.length, 2);
 assert.equal(attachedVoid.integrationOutbox.voidJobIds.length, 2);
 
+const canceledUnpaidSale = {
+  ...affiliateSale,
+  status: "voided",
+  voidedAt: "2026-06-28T11:10:00.000Z",
+  externalReferences: {
+    ...affiliateSale.externalReferences,
+    simplePayReference: "",
+    simplePayStatus: "pending",
+    affiliateOrderId: "",
+    affiliateStatus: "pending"
+  }
+};
+assert.deepEqual(
+  contract.buildJobs(canceledUnpaidSale, "void"),
+  [],
+  "unpaid cancellation must not create refund or affiliate reversal jobs"
+);
+assert.deepEqual(
+  contract.attachJobReferences(canceledUnpaidSale, "void").integrationOutbox.voidJobIds,
+  []
+);
+
 assert.match(cloudSource, /function writeIntegrationJobs\(/);
 assert.match(cloudSource, /writeIntegrationJobs\(transaction, sale, "checkout"\)/);
 assert.match(cloudSource, /writeIntegrationJobs\(transaction, voidedSale, "void"\)/);
@@ -170,9 +192,11 @@ assert.match(rulesSource, /match \/integrationJobs\/\{jobId\}/);
 assert.match(rulesSource, /request\.resource\.data\.status == "pending"/);
 assert.match(appSource, /attachIntegrationOutbox\(\{/);
 assert.match(htmlSource, /integration-contract\.js/);
-assert.match(swSource, /simple-pos-v88/);
+assert.match(swSource, /simple-pos-v97/);
+assert.match(cloudSource, /function cancelOpenIntegrationJobs\(/);
+assert.match(cloudSource, /status: "canceled"/);
 assert.doesNotMatch(appSource, /price:\s*150/);
 assert.match(appSource, /LEGACY_DEMO_PRODUCT_BARCODES/);
 assert.match(cloudSource, /async function deleteProduct\(/);
 
-console.log("integration-outbox.test.js: 35 integration outbox assertions passed");
+console.log("integration-outbox.test.js: 41 integration outbox assertions passed");

@@ -39,6 +39,12 @@ function classList() {
     remove(value) {
       values.delete(value);
     },
+    toggle(value, force) {
+      if (force === true) values.add(value);
+      else if (force === false) values.delete(value);
+      else if (values.has(value)) values.delete(value);
+      else values.add(value);
+    },
     contains(value) {
       return values.has(value);
     }
@@ -63,7 +69,7 @@ const context = {
     adminOfflinePasswordInput: { value: "", focus() {} },
     adminOfflinePasswordConfirm: { value: "", focus() {} },
     adminOfflinePasswordForm: { reset() { context.formReset = true; } },
-    adminOfflinePasswordStatus: { textContent: "" }
+    adminOfflinePasswordStatus: { textContent: "", classList: classList() }
   },
   adminEmail: "",
   operatorEmail: "",
@@ -99,8 +105,9 @@ const context = {
   save(key, value) {
     context.savedUsers = { key, value: structuredClone(value) };
   },
-  syncManagementToCloud(type, user) {
+  async syncManagementToCloud(type, user) {
     syncedUsers.push({ type, user: structuredClone(user) });
+    return context.cloudSyncResult ?? true;
   },
   writeAuditLog(action, detail) {
     audits.push({ action, detail });
@@ -176,13 +183,22 @@ const event = { preventDefault() {} };
   assert.equal(audits[0].action, "admin.offline-password.update");
   assert.equal(context.formReset, true);
   assert.match(context.els.adminOfflinePasswordStatus.textContent, /安全更新/);
+  assert.equal(context.els.adminOfflinePasswordStatus.classList.contains("error"), false);
+
+  context.cloudSyncResult = false;
+  context.els.adminOfflinePasswordInput.value = "another-password";
+  context.els.adminOfflinePasswordConfirm.value = "another-password";
+  await context.saveAdminOfflinePassword(event);
+  assert.match(context.els.adminOfflinePasswordStatus.textContent, /本设备/);
+  assert.match(context.els.adminOfflinePasswordStatus.textContent, /其他设备暂时不能/);
+  assert.equal(context.els.adminOfflinePasswordStatus.classList.contains("error"), true);
 
   assert.match(appSource, /sessionStorage\.setItem/);
   assert.match(appSource, /sessionStorage\.removeItem/);
   assert.doesNotMatch(appSource, /localStorage\.setItem\(STORAGE_KEYS\.(adminEmail|operatorEmail)/);
   assert.match(appSource, /adminOfflinePasswordForm\.addEventListener\("submit", saveAdminOfflinePassword\)/);
 
-  console.log("admin-login-security.test.js: 24 项管理员登录与会话安全测试通过");
+  console.log("admin-login-security.test.js: 28 项管理员登录与会话安全测试通过");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
