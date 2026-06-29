@@ -222,13 +222,14 @@
 
         <div class="panel-subsection" data-view-panel="settings">
           <h3>管理员离线密码</h3>
-          <p class="helper-text">必须先使用 Google 管理员登录。密码只保存加盐哈希，断网时才使用。</p>
+          <p class="helper-text">必须先使用 Google 管理员登录。一个管理员邮箱和离线密码适用于总店及所有分行，不需要逐个分行设置。密码只保存加盐哈希，断网时才使用。</p>
           <form id="adminOfflinePasswordForm" class="settings-form">
             <input id="adminOfflinePasswordInput" required type="password" minlength="8" autocomplete="new-password" placeholder="新离线密码（至少 8 位）">
             <input id="adminOfflinePasswordConfirm" required type="password" minlength="8" autocomplete="new-password" placeholder="再次输入新离线密码">
             <button class="primary" type="submit">设置管理员离线密码</button>
             <p id="adminOfflinePasswordStatus" class="form-message">尚未设置</p>
           </form>
+          <p class="helper-text">其他收银设备必须先联网登录并完成资料同步一次，之后才可在该设备断网登录。</p>
         </div>
 
         <div class="panel-subsection" data-view-panel="settings">
@@ -258,10 +259,13 @@
 
         <div class="panel-subsection" data-view-panel="settings">
           <h3>开设新分行</h3>
+          <p class="helper-text">管理员拥有全部分行权限，可在 POS 顶部的“当前分行”切换；员工账号仍只绑定一个授权分行。</p>
           <form id="branchForm" class="branch-form">
             <input id="branchNameInput" required placeholder="分行名称，例如：槟城分行">
+            <input id="branchSimplePayMerchantIdInput" placeholder="SimplePay 商家 ID（可稍后设置）">
             <button class="primary" type="submit">新增分行</button>
           </form>
+          <p class="helper-text">每个分行可对应独立的 SimplePay 商家。未设置商家 ID 时，POS 仍可使用其他付款方式。</p>
           <div id="branchList" class="management-list"></div>
         </div>
 
@@ -444,7 +448,7 @@
         原因
         <input id="cashMovementReason" required maxlength="120" placeholder="例如：增加找零钱、现金存银行">
       </label>
-      <button class="primary" type="submit">登记现金流水</button>
+      <button id="cashMovementSubmitBtn" class="primary" type="submit">登记现金流水</button>
       <div class="settlement-metrics">
         <div>
           <span>累计存入</span>
@@ -635,14 +639,24 @@
     <div class="receipt">
       <div class="panel-header">
         <div>
-          <h2>收款成功</h2>
+          <h2 id="receiptTitle">收款成功</h2>
           <p id="receiptNo"></p>
         </div>
         <button id="closeReceiptBtn" class="ghost" type="button">关闭</button>
       </div>
       <pre id="receiptText"></pre>
+      <div id="receiptSimplePayPanel" class="receipt-simplepay hidden">
+        <img id="receiptSimplePayQr" alt="SimplePay 付款二维码">
+        <div>
+          <strong>等待顾客确认 SimplePay 付款</strong>
+          <small>付款意图编号</small>
+          <code id="receiptSimplePayIntent"></code>
+        </div>
+      </div>
+      <p id="receiptPaymentStatus" class="helper-text hidden"></p>
       <p id="receiptPrinterStatus" class="helper-text">蓝牙打印机尚未连接</p>
       <div class="receipt-actions">
+        <button id="receiptCheckPaymentBtn" class="primary hidden" type="button">检查付款状态</button>
         <button id="bluetoothPrintReceiptBtn" class="primary" type="button">蓝牙打印</button>
         <button id="printReceiptBtn" class="ghost" type="button">系统打印</button>
       </div>

@@ -195,6 +195,11 @@ async function saveSale(sale) {
   }, { merge: true });
 }
 
+async function loadSale(saleId) {
+  const snapshot = await getDoc(doc(db, "sales", saleId));
+  return snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null;
+}
+
 function writeIntegrationJobs(transaction, sale, eventType) {
   if (!window.integrationContract) return [];
   const jobs = window.integrationContract.buildJobs(sale, eventType);
@@ -206,6 +211,38 @@ function writeIntegrationJobs(transaction, sale, eventType) {
     });
   }
   return jobs;
+}
+
+async function readCheckoutIntegrationJobs(transaction, sale) {
+  const jobIds = Array.isArray(sale.integrationOutbox?.checkoutJobIds)
+    ? sale.integrationOutbox.checkoutJobIds
+    : [];
+  const snapshots = [];
+  for (const jobId of jobIds) {
+    snapshots.push(await transaction.get(doc(db, "integrationJobs", jobId)));
+  }
+  return snapshots;
+}
+
+function cancelOpenIntegrationJobs(transaction, snapshots, saleId) {
+  const cancellable = new Set([
+    "pending",
+    "processing",
+    "retry",
+    "blocked",
+    "awaiting-customer-authorization",
+    "dispatched"
+  ]);
+  for (const snapshot of snapshots) {
+    if (!snapshot.exists() || !cancellable.has(snapshot.data().status)) continue;
+    transaction.update(snapshot.ref, {
+      status: "canceled",
+      cancelReason: "pos-order-canceled",
+      canceledPosOrderId: saleId,
+      canceledAt: new Date().toISOString(),
+      cloudUpdatedAt: serverTimestamp()
+    });
+  }
 }
 
 async function saveCheckout(sale) {
@@ -306,11 +343,13 @@ async function saveVoid(sale) {
     const saleRef = doc(db, "sales", sale.id);
     const existingSnapshot = await transaction.get(saleRef);
     if (!existingSnapshot.exists()) {
+      const integrationJobSnapshots = await readCheckoutIntegrationJobs(transaction, sale);
       transaction.set(saleRef, {
         ...sale,
         syncStatus: "synced",
         syncedAt: serverTimestamp()
       }, { merge: true });
+      cancelOpenIntegrationJobs(transaction, integrationJobSnapshots, sale.id);
       return {
         status: "voided",
         stockStatus: "not-required",
@@ -327,6 +366,7 @@ async function saveVoid(sale) {
       };
     }
 
+    const integrationJobSnapshots = await readCheckoutIntegrationJobs(transaction, existingSale);
     const hadInventoryConflict = existingSale.inventoryReview?.status === "required";
     const saleItems = Array.isArray(existingSale.items) ? existingSale.items : (sale.items || []);
     const productSnapshots = [];
@@ -397,6 +437,7 @@ async function saveVoid(sale) {
       updatedAt: serverTimestamp(),
       syncedAt: serverTimestamp()
     });
+    cancelOpenIntegrationJobs(transaction, integrationJobSnapshots, sale.id);
     return {
       status: "voided",
       stockStatus: hadInventoryConflict
@@ -434,6 +475,7 @@ window.cloudPOS = {
   saveAuditLog,
   saveSettings,
   loadSettings,
+  loadSale,
   saveSale,
   saveCheckout,
   saveVoid

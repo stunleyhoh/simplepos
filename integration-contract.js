@@ -115,7 +115,11 @@
     const jobs = [];
     let refundJob = null;
 
-    if (references.simplePayStatus && references.simplePayStatus !== "not-used") {
+    if (
+      text(references.simplePayReference)
+      && references.simplePayStatus
+      && references.simplePayStatus !== "not-used"
+    ) {
       refundJob = {
         ...baseJob(sale, "simplepay.refund", "simplepay", createdAt),
         action: "refund-payment",
@@ -128,8 +132,7 @@
     const referralCode = text(
       references.affiliateReferralCode || customer.referralCode
     ).toUpperCase();
-    const eligibleItems = affiliateItems(sale.items);
-    if ((referralCode && eligibleItems.length) || text(references.affiliateOrderId)) {
+    if (text(references.affiliateOrderId)) {
       jobs.push({
         ...baseJob(sale, "affiliate.reverse", "affiliate", createdAt),
         action: "reverse-order-benefits",

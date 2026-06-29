@@ -22,7 +22,7 @@ const STORAGE_KEYS = {
 };
 
 const ADMIN_EMAIL_HASH = "967c8833b2067bcf8ad711b817f9662dc8fd48e79e82992bfd56d5af919a6915";
-const APP_VERSION = "v0.76";
+const APP_VERSION = "v0.85";
 const AUTHORIZATION_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const defaultBranches = [
   { id: "hq", name: "总店" },
@@ -102,6 +102,8 @@ let lastAuthorizationCheckAt = 0;
 let authorizationRefreshInFlight = false;
 let pendingSyncPromise = null;
 let cloudDataLoadPromise = null;
+let checkoutInProgress = false;
+let cashMovementInProgress = false;
 
 const VIEW_META = {
   order: { title: "下单", subtitle: "选择商品并完成当前订单" },
@@ -264,6 +266,7 @@ const els = {
   receiptFooterInput: document.querySelector("#receiptFooterInput"),
   branchForm: document.querySelector("#branchForm"),
   branchNameInput: document.querySelector("#branchNameInput"),
+  branchSimplePayMerchantIdInput: document.querySelector("#branchSimplePayMerchantIdInput"),
   branchList: document.querySelector("#branchList"),
   userForm: document.querySelector("#userForm"),
   userNameInput: document.querySelector("#userNameInput"),
@@ -285,8 +288,14 @@ const els = {
   allSalesDatesBtn: document.querySelector("#allSalesDatesBtn"),
   salesList: document.querySelector("#salesList"),
   receiptDialog: document.querySelector("#receiptDialog"),
+  receiptTitle: document.querySelector("#receiptTitle"),
   receiptNo: document.querySelector("#receiptNo"),
   receiptText: document.querySelector("#receiptText"),
+  receiptSimplePayPanel: document.querySelector("#receiptSimplePayPanel"),
+  receiptSimplePayQr: document.querySelector("#receiptSimplePayQr"),
+  receiptSimplePayIntent: document.querySelector("#receiptSimplePayIntent"),
+  receiptPaymentStatus: document.querySelector("#receiptPaymentStatus"),
+  receiptCheckPaymentBtn: document.querySelector("#receiptCheckPaymentBtn"),
   closeReceiptBtn: document.querySelector("#closeReceiptBtn"),
   printReceiptBtn: document.querySelector("#printReceiptBtn"),
   bluetoothPrintReceiptBtn: document.querySelector("#bluetoothPrintReceiptBtn"),
@@ -333,6 +342,7 @@ const els = {
   cashMovementType: document.querySelector("#cashMovementType"),
   cashMovementAmount: document.querySelector("#cashMovementAmount"),
   cashMovementReason: document.querySelector("#cashMovementReason"),
+  cashMovementSubmitBtn: document.querySelector("#cashMovementSubmitBtn"),
   cashMovementInTotal: document.querySelector("#cashMovementInTotal"),
   cashMovementOutTotal: document.querySelector("#cashMovementOutTotal"),
   cashMovementList: document.querySelector("#cashMovementList"),
@@ -1156,13 +1166,15 @@ function getShiftSummary(shift) {
   const shiftSales = getShiftSales(shift);
   const allShiftSales = getShiftAllSales(shift);
   const voidedSales = allShiftSales.filter(isSaleVoided);
+  const pendingPaymentSales = allShiftSales.filter(isSalePaymentPending);
   const shiftSaleIds = new Set(allShiftSales.map((sale) => sale.id));
   const pendingOrderIds = new Set(
     [...pendingSales, ...pendingSaleUpdates]
       .filter((sale) => shiftSaleIds.has(sale.id))
       .map((sale) => sale.id)
   );
-  const normalizedReferences = shiftSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
+  const normalizedReferences = getNonVoidedSales(allShiftSales)
+    .map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
   const payments = getPaymentSummaryRows(shiftSales);
   const cashSales = Number(payments.find((item) => item.method === "现金")?.total || 0);
   const openingCash = Math.max(0, Number(shift.openingCash || 0));
@@ -1178,6 +1190,8 @@ function getShiftSummary(shift) {
     expectedCash: openingCash + cashSales + cashIn - cashOut,
     voidedOrders: voidedSales.length,
     voidedTotal: voidedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0),
+    pendingPaymentOrders: pendingPaymentSales.length,
+    pendingPaymentTotal: pendingPaymentSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0),
     pendingOrderSync: pendingOrderIds.size,
     pendingSyncTotal: pendingSales.length
       + pendingSaleUpdates.length
@@ -1298,6 +1312,7 @@ function renderCashMovementDialog() {
 
 function recordCashMovement(event) {
   event.preventDefault();
+  if (cashMovementInProgress) return;
   if (!currentShift || currentShift.closedAt) return;
   if (!canManageCurrentShift()) {
     alert("当前账号无权修改这个班次的现金流水。");
@@ -1310,27 +1325,44 @@ function recordCashMovement(event) {
     alert("请填写有效金额和原因。");
     return;
   }
-  seedLegacyCashMovements(currentShift);
-  const movement = {
-    id: `CASH-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-    type,
-    amount: Number(amount.toFixed(2)),
-    reason,
-    createdAt: new Date().toISOString(),
-    actor: getCurrentActor()
-  };
-  currentShift.cashMovements.push(movement);
-  refreshCurrentShiftCashTotals();
-  writeAuditLog("shift.cash-movement", {
-    shiftId: currentShift.id,
-    movementId: movement.id,
-    type,
-    amount: movement.amount,
-    reason
-  });
-  els.cashMovementForm.reset();
-  renderCashMovementDialog();
-  renderOperatorAccess();
+  cashMovementInProgress = true;
+  els.cashMovementSubmitBtn.disabled = true;
+  els.cashMovementSubmitBtn.textContent = "正在保存...";
+  try {
+    const nextShift = structuredClone(currentShift);
+    seedLegacyCashMovements(nextShift);
+    const movement = {
+      id: `CASH-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      type,
+      amount: Number(amount.toFixed(2)),
+      reason,
+      createdAt: new Date().toISOString(),
+      actor: getCurrentActor()
+    };
+    nextShift.cashMovements.push(movement);
+    const totals = getShiftCashMovementTotals(nextShift);
+    nextShift.cashIn = Number(totals.cashIn.toFixed(2));
+    nextShift.cashOut = Number(totals.cashOut.toFixed(2));
+    if (!save(STORAGE_KEYS.currentShift, nextShift)) {
+      alert("现金流水尚未保存，原有班次资料没有改变，请处理浏览器储存空间后重试。");
+      return;
+    }
+    currentShift = nextShift;
+    writeAuditLog("shift.cash-movement", {
+      shiftId: currentShift.id,
+      movementId: movement.id,
+      type,
+      amount: movement.amount,
+      reason
+    });
+    els.cashMovementForm.reset();
+    renderCashMovementDialog();
+    renderOperatorAccess();
+  } finally {
+    cashMovementInProgress = false;
+    els.cashMovementSubmitBtn.disabled = false;
+    els.cashMovementSubmitBtn.textContent = "登记现金流水";
+  }
 }
 
 function reverseCashMovement(movementId) {
@@ -1416,6 +1448,7 @@ function openShiftSettlement() {
   if (summary.pendingOrderSync) warnings.push(`本班有 ${summary.pendingOrderSync} 笔订单或更新等待同步。`);
   if (summary.pendingSyncTotal > summary.pendingOrderSync) warnings.push(`本机另有 ${summary.pendingSyncTotal - summary.pendingOrderSync} 项库存或审计资料等待同步。`);
   if (summary.inventoryReviewPending) warnings.push(`${summary.inventoryReviewPending} 笔订单库存待复核。`);
+  if (summary.pendingPaymentOrders) warnings.push(`${summary.pendingPaymentOrders} 笔订单等待顾客付款，金额 ${money(summary.pendingPaymentTotal)} 不计入本班收入。`);
   if (summary.simplePayPending) warnings.push(`${summary.simplePayPending} 笔 SimplePay 付款待确认。`);
   if (summary.affiliatePending) warnings.push(`${summary.affiliatePending} 笔联盟订单待关联。`);
   if (summary.voidedOrders) warnings.push(`${summary.voidedOrders} 笔作废订单，原金额 ${money(summary.voidedTotal)}。`);
@@ -1456,6 +1489,8 @@ function getSettlementReconciliation(shift = currentShift) {
     pendingOrderSync: summary.pendingOrderSync,
     pendingSyncTotal: summary.pendingSyncTotal,
     inventoryReviewPending: summary.inventoryReviewPending,
+    pendingPaymentOrders: summary.pendingPaymentOrders,
+    pendingPaymentTotal: summary.pendingPaymentTotal,
     simplePayPending: summary.simplePayPending,
     affiliatePending: summary.affiliatePending,
     note: els.settlementNote.value.trim(),
@@ -1589,6 +1624,8 @@ function buildShiftSettlementRows(shift, reconciliation = shift?.reconciliation)
     ["本班待同步订单", reconciliation?.pendingOrderSync ?? summary.pendingOrderSync ?? 0],
     ["本机全部待同步", reconciliation?.pendingSyncTotal ?? summary.pendingSyncTotal ?? 0],
     ["库存待复核", reconciliation?.inventoryReviewPending ?? summary.inventoryReviewPending ?? 0],
+    ["待付款订单", reconciliation?.pendingPaymentOrders ?? summary.pendingPaymentOrders ?? 0],
+    ["待付款金额（不计收入）", reconciliation?.pendingPaymentTotal ?? summary.pendingPaymentTotal ?? 0],
     ["SimplePay 待确认", reconciliation?.simplePayPending ?? summary.simplePayPending ?? 0],
     ["联盟待关联", reconciliation?.affiliatePending ?? summary.affiliatePending ?? 0]
   );
@@ -1623,6 +1660,8 @@ function exportCurrentShiftSettlement(shift = currentShift) {
       pendingOrderSync: summary.pendingOrderSync || 0,
       pendingSyncTotal: summary.pendingSyncTotal || 0,
       inventoryReviewPending: summary.inventoryReviewPending || 0,
+      pendingPaymentOrders: summary.pendingPaymentOrders || 0,
+      pendingPaymentTotal: summary.pendingPaymentTotal || 0,
       simplePayPending: summary.simplePayPending || 0,
       affiliatePending: summary.affiliatePending || 0,
       note: els.settlementNote.value.trim()
@@ -1642,6 +1681,8 @@ function exportCurrentShiftSettlement(shift = currentShift) {
       pendingOrderSync: summary.pendingOrderSync || 0,
       pendingSyncTotal: summary.pendingSyncTotal || 0,
       inventoryReviewPending: summary.inventoryReviewPending || 0,
+      pendingPaymentOrders: summary.pendingPaymentOrders || 0,
+      pendingPaymentTotal: summary.pendingPaymentTotal || 0,
       simplePayPending: summary.simplePayPending || 0,
       affiliatePending: summary.affiliatePending || 0,
       note: "旧版交班记录，未保存现金实点"
@@ -2498,14 +2539,21 @@ function renderManagementLists() {
   els.branchList.innerHTML = "";
   for (const branch of branches) {
     const row = document.createElement("div");
-    row.className = "management-row";
+    row.className = "management-row branch-management-row";
     row.innerHTML = `
       <div>
         <strong>${escapeHtml(branch.name)}</strong>
-        <small>${escapeHtml(branch.id)}</small>
+        <small>${escapeHtml(branch.id)} · ${authorizedUsers.filter((user) => user.branchId === branch.id).length} 位授权用户</small>
       </div>
-      <small>${authorizedUsers.filter((user) => user.branchId === branch.id).length} 位授权用户</small>
+      <div class="row-actions branch-merchant-actions">
+        <input type="text" value="${escapeHtml(branch.simplePayMerchantId || "")}" placeholder="SimplePay 商家 ID" aria-label="${escapeHtml(branch.name)} SimplePay 商家 ID">
+        <button class="ghost" type="button">保存对应商家</button>
+      </div>
     `;
+    const merchantInput = row.querySelector("input");
+    row.querySelector("button").addEventListener("click", () => {
+      updateBranchSimplePayMerchant(branch.id, merchantInput.value);
+    });
     els.branchList.append(row);
   }
 
@@ -2627,18 +2675,35 @@ function addBranch(event) {
   event.preventDefault();
   if (!requireAdmin()) return;
   const name = els.branchNameInput.value.trim();
+  const simplePayMerchantId = els.branchSimplePayMerchantIdInput.value.trim();
   const id = createSlug(name);
   if (branches.some((branch) => branch.id === id || branch.name === name)) {
     alert("这个分行已经存在。");
     return;
   }
-  branches.push({ id, name });
+  const branch = { id, name, simplePayMerchantId };
+  branches.push(branch);
   products = products.map((product) => setBranchStock(product, id, 0));
   save(STORAGE_KEYS.branches, branches);
   save(STORAGE_KEYS.products, products);
-  syncManagementToCloud("branch", { id, name });
-  writeAuditLog("branch.create", { id, name });
+  syncManagementToCloud("branch", branch);
+  writeAuditLog("branch.create", { id, name, simplePayMerchantId });
   els.branchForm.reset();
+  renderAll();
+}
+
+function updateBranchSimplePayMerchant(branchId, value) {
+  if (!requireAdmin()) return;
+  const simplePayMerchantId = String(value || "").trim();
+  const branch = branches.find((item) => item.id === branchId);
+  if (!branch) return;
+  branch.simplePayMerchantId = simplePayMerchantId;
+  save(STORAGE_KEYS.branches, branches);
+  syncManagementToCloud("branch", branch);
+  writeAuditLog("branch.simplepay-merchant.update", {
+    branchId,
+    configured: Boolean(simplePayMerchantId)
+  });
   renderAll();
 }
 
@@ -2967,18 +3032,22 @@ function renderInventoryOverview() {
         <strong>${escapeHtml(product.name)}</strong>
         <small>${escapeHtml(selectedBranchName)} · SKU ${escapeHtml(product.barcode || "-")} · 总库存 ${totalStock}</small>
       </div>
-      <button class="ghost stock-adjust-button" type="button" data-adjust-stock data-product-id="${escapeHtml(product.id)}" data-branch-id="${escapeHtml(selectedBranchId)}">
-        库存 ${selectedStock} · 调整
-      </button>
+      <form class="inventory-adjust-control" data-adjust-stock data-product-id="${escapeHtml(product.id)}" data-branch-id="${escapeHtml(selectedBranchId)}">
+        <input type="number" min="0" step="1" required value="${selectedStock}" aria-label="${escapeHtml(product.name)} ${escapeHtml(selectedBranchName)} 库存">
+        <button class="ghost stock-adjust-button" type="submit">保存</button>
+      </form>
     `;
-    for (const button of row.querySelectorAll("[data-adjust-stock]")) {
-      button.addEventListener("click", () => adjustInventoryStock(button.dataset.productId, button.dataset.branchId));
-    }
+    const form = row.querySelector("[data-adjust-stock]");
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const input = form.querySelector("input");
+      adjustInventoryStock(form.dataset.productId, form.dataset.branchId, input.value, input);
+    });
     els.inventoryOverviewList.append(row);
   }
 }
 
-function adjustInventoryStock(productId, branchId) {
+function adjustInventoryStock(productId, branchId, rawValue, inputElement = null) {
   if (!requireOperations()) return;
   const product = products.find((item) => item.id === productId);
   const resolvedBranchId = resolveBranchId(branchId);
@@ -2991,24 +3060,26 @@ function adjustInventoryStock(productId, branchId) {
     return;
   }
   const beforeStock = getBranchStock(product, resolvedBranchId);
-  const input = prompt(`请输入 ${getBranchName(resolvedBranchId)} 的新库存数量。`, String(beforeStock));
-  if (input === null) return;
-  const nextStock = Number(input);
+  const nextStock = Number(rawValue);
   if (!Number.isFinite(nextStock) || nextStock < 0 || !Number.isInteger(nextStock)) {
-    alert("库存必须是 0 或以上的整数。");
+    if (inputElement) {
+      inputElement.setCustomValidity("库存必须是 0 或以上的整数");
+      inputElement.reportValidity();
+      inputElement.focus();
+    } else {
+      alert("库存必须是 0 或以上的整数。");
+    }
     return;
   }
+  if (inputElement) inputElement.setCustomValidity("");
   if (nextStock === beforeStock) return;
 
   let savedProduct = product;
-  products = products.map((item) => {
+  const nextProducts = products.map((item) => {
     if (item.id !== productId) return normalizeProductBranches(item);
     savedProduct = normalizeProductBranches(setBranchStock(item, resolvedBranchId, nextStock));
     return savedProduct;
   });
-  save(STORAGE_KEYS.products, products);
-  syncProductToCloud(savedProduct);
-
   const adjustment = {
     id: `ADJ${Date.now()}`,
     createdAt: new Date().toISOString(),
@@ -3020,10 +3091,21 @@ function adjustInventoryStock(productId, branchId) {
     beforeStock,
     afterStock: nextStock,
     delta: nextStock - beforeStock,
-    reason: "管理员库存页调整",
-    operator: currentCloudUser || { email: adminEmail || "", name: "管理员" }
+    reason: "库存页调整",
+    operator: getCurrentActor()
   };
-  recordStockAdjustment(adjustment);
+  const nextStockAdjustments = [
+    adjustment,
+    ...stockAdjustments.filter((item) => item.id !== adjustment.id)
+  ].slice(0, 500);
+  const saved = saveStorageBatch([
+    [STORAGE_KEYS.products, nextProducts],
+    [STORAGE_KEYS.stockAdjustments, nextStockAdjustments]
+  ]);
+  if (!saved) return;
+  products = nextProducts;
+  stockAdjustments = nextStockAdjustments;
+  syncProductToCloud(savedProduct);
   syncStockAdjustmentToCloud(adjustment);
   writeAuditLog("inventory.adjust", {
     productId: savedProduct.id,
@@ -3090,10 +3172,13 @@ async function saveAdminOfflinePassword(event) {
     : [adminUser, ...authorizedUsers];
   currentCloudUser = { ...currentCloudUser, ...adminUser };
   save(STORAGE_KEYS.authorizedUsers, authorizedUsers);
-  syncManagementToCloud("user", adminUser);
+  const cloudSynced = await syncManagementToCloud("user", adminUser);
   writeAuditLog("admin.offline-password.update", { email });
   els.adminOfflinePasswordForm.reset();
-  els.adminOfflinePasswordStatus.textContent = "管理员离线密码已安全更新。";
+  els.adminOfflinePasswordStatus.textContent = cloudSynced
+    ? "管理员离线密码已安全更新并同步云端。"
+    : "管理员离线密码已保存到本设备；云端尚未同步，其他设备暂时不能离线使用。";
+  els.adminOfflinePasswordStatus.classList.toggle("error", !cloudSynced);
   renderManagementLists();
 }
 
@@ -3117,7 +3202,7 @@ function renderPrinterSettings() {
 
 function renderIntegrationOverview() {
   if (!els.integrationOverview) return;
-  const activeSales = getActiveSales();
+  const activeSales = getNonVoidedSales();
   const outboxJobCount = sales.reduce((total, sale) => {
     const outbox = sale.integrationOutbox || {};
     return total
@@ -3437,8 +3522,14 @@ function isSaleVoided(sale) {
   return sale.status === "voided";
 }
 
+function isSalePaymentPending(sale) {
+  return sale.status === "payment-pending";
+}
+
 function getSaleStatusText(sale) {
-  return isSaleVoided(sale) ? "已作废" : "正常";
+  if (isSaleVoided(sale)) return "已作废";
+  if (isSalePaymentPending(sale)) return "等待 SimplePay 付款（库存已预留）";
+  return "正常";
 }
 
 function getSaleSyncText(sale) {
@@ -3711,6 +3802,10 @@ function saveIntegrationDetails(event) {
 }
 
 function getActiveSales(source = sales) {
+  return source.filter((sale) => !isSaleVoided(sale) && !isSalePaymentPending(sale));
+}
+
+function getNonVoidedSales(source = sales) {
   return source.filter((sale) => !isSaleVoided(sale));
 }
 
@@ -3722,15 +3817,13 @@ function voidSale(saleId) {
     alert("员工只能处理自己授权分行的退款/作废。");
     return;
   }
-  if (navigator.onLine && hasCloud() && pendingSales.some((item) => item.id === saleId)) {
+  const unpaidCancellation = isSalePaymentPending(sale);
+  if (!unpaidCancellation && navigator.onLine && hasCloud() && pendingSales.some((item) => item.id === saleId)) {
     alert("订单首次云端同步仍在进行，请稍后再退款。断网订单仍可直接作废。");
     return;
   }
-  if (!confirm(`确定作废订单 ${sale.id} 并回补库存吗？`)) return;
-  if (prompt("请输入 VOID 确认作废订单。") !== "VOID") {
-    alert("已取消作废。");
-    return;
-  }
+  const actionText = unpaidCancellation ? "取消待付款订单并释放预留库存" : "作废订单并回补库存";
+  if (!confirm(`确定${actionText} ${sale.id} 吗？`)) return;
   const voidedAt = new Date().toISOString();
   const actor = getCurrentActor();
   const hadInventoryConflict = requiresInventoryReview(sale);
@@ -3754,7 +3847,7 @@ function voidSale(saleId) {
       delta: Number(sold.qty || 0),
       reason: hadInventoryConflict
         ? `库存冲突订单作废，本机回补（云端未扣减） ${sale.id}`
-        : `订单作废回补 ${sale.id}`,
+        : (unpaidCancellation ? `待付款订单取消，释放预留库存 ${sale.id}` : `订单作废回补 ${sale.id}`),
       cloudStockSyncMode: hadInventoryConflict ? "not-required" : "refund-transaction",
       operator: actor
     };
@@ -3799,7 +3892,7 @@ function voidSale(saleId) {
     [STORAGE_KEYS.pendingStockAdjustments, nextPendingStockAdjustments]
   ]);
   if (!voidSaved) {
-    alert("退款尚未执行：本机无法安全保存订单与库存，原订单保持正常状态。");
+    alert(`${unpaidCancellation ? "取消" : "退款"}尚未执行：本机无法安全保存订单与库存，原订单保持原状态。`);
     return;
   }
   products = nextProducts;
@@ -3812,7 +3905,7 @@ function voidSale(saleId) {
     syncStockAdjustmentToCloud(adjustment);
   }
   syncVoidToCloud(updatedSale);
-  writeAuditLog("sale.void", {
+  writeAuditLog(unpaidCancellation ? "sale.payment-pending.cancel" : "sale.void", {
     saleId,
     branchId: sale.branchId || "hq",
     total: sale.total,
@@ -4075,7 +4168,7 @@ function getCartDueAmount() {
 }
 
 function needsPaymentReference(method) {
-  return method !== "现金";
+  return method !== "现金" && method !== "简单支付 / SimplePay";
 }
 
 function updatePaymentPreview() {
@@ -4096,31 +4189,37 @@ function openPaymentDialog() {
 }
 
 async function checkout() {
+  if (checkoutInProgress) return;
   if (!cart.length) return;
   if (!requireOperator()) return;
   const totals = getCartTotals();
-  if (totals.paid < totals.total) {
+  const paymentMethod = els.paymentMethodInput.value;
+  const paymentReference = els.paymentReferenceInput.value.trim();
+  const simplePayPending = paymentMethod === "简单支付 / SimplePay" && !paymentReference;
+  if (!simplePayPending && totals.paid < totals.total) {
     alert("实收金额不足。");
     els.paidInput.focus();
     return;
   }
-  const paymentMethod = els.paymentMethodInput.value;
-  const paymentReference = els.paymentReferenceInput.value.trim();
   if (needsPaymentReference(paymentMethod) && !paymentReference && !confirm("这个付款方式建议填写参考号。确定继续收款吗？")) {
     els.paymentReferenceInput.focus();
     return;
   }
   if (!ensureCurrentShift()) return;
-  const cashier = getActiveCashier();
+  checkoutInProgress = true;
+  els.confirmPaymentBtn.disabled = true;
+  els.confirmPaymentBtn.textContent = "正在保存订单...";
+  try {
+    const cashier = getActiveCashier();
 
-  const createdAt = new Date();
-  const serviceEnd = new Date(createdAt);
-  serviceEnd.setDate(serviceEnd.getDate() + Number(appSettings.serviceDays || 21));
+    const createdAt = new Date();
+    const serviceEnd = new Date(createdAt);
+    serviceEnd.setDate(serviceEnd.getDate() + Number(appSettings.serviceDays || 21));
 
-  const saleId = createPosOrderId();
-  const affiliateReferralCode = els.affiliateReferralCodeInput.value.trim().toUpperCase();
-  const affiliateEligible = Boolean(window.integrationContract?.hasAffiliateItems(cart));
-  const sale = attachIntegrationOutbox({
+    const saleId = createPosOrderId();
+    const affiliateReferralCode = els.affiliateReferralCodeInput.value.trim().toUpperCase();
+    const affiliateEligible = Boolean(window.integrationContract?.hasAffiliateItems(cart));
+    const sale = attachIntegrationOutbox({
     id: saleId,
     createdAt: createdAt.toISOString(),
     branchId: currentBranchId,
@@ -4142,8 +4241,8 @@ async function checkout() {
     subtotal: totals.subtotal,
     discount: totals.discount,
     total: totals.total,
-    paid: totals.paid,
-    change: totals.change,
+    paid: simplePayPending ? 0 : totals.paid,
+    change: simplePayPending ? 0 : totals.change,
     payment: {
       method: paymentMethod,
       reference: paymentReference
@@ -4158,64 +4257,173 @@ async function checkout() {
       affiliateOrderId: "",
       affiliateStatus: affiliateReferralCode && affiliateEligible ? "pending" : "not-used"
     },
+    status: simplePayPending ? "payment-pending" : "completed",
     syncStatus: navigator.onLine && hasCloud() ? "queued" : "pending"
-  }, "checkout");
+    }, "checkout");
 
-  const changedProducts = [];
-  const nextProducts = products.map((product) => {
-    const sold = sale.items.find((item) => item.id === product.id);
-    if (!sold) return product;
-    const updatedProduct = setBranchStock(product, currentBranchId, getBranchStock(product) - sold.qty);
-    changedProducts.push(updatedProduct);
-    return updatedProduct;
-  });
-  const nextSales = [sale, ...sales];
-  const nextPendingSales = [
-    { ...sale, syncStatus: "pending" },
-    ...pendingSales.filter((item) => item.id !== sale.id)
-  ];
-  const checkoutSaved = saveStorageBatch([
-    [STORAGE_KEYS.products, nextProducts],
-    [STORAGE_KEYS.sales, nextSales],
-    [STORAGE_KEYS.pendingSales, nextPendingSales]
-  ]);
-  if (!checkoutSaved) {
-    alert("收款尚未完成：本机无法安全保存订单。购物车和库存都没有改变，请先处理浏览器储存空间后重试。");
-    return;
-  }
-  products = nextProducts;
-  sales = nextSales;
-  pendingSales = nextPendingSales;
-  cart = [];
-  els.customerNameInput.value = "";
-  els.customerPhoneInput.value = "";
-  els.affiliateReferralCodeInput.value = "";
-  els.discountInput.value = "0";
-  els.paidInput.value = "";
-  els.paymentReferenceInput.value = "";
-  autoFillPaid = true;
-  if (!hasCloud() || !window.cloudPOS.saveCheckout) {
-    for (const product of changedProducts) {
-      syncProductToCloud(product);
+    const changedProducts = [];
+    const nextProducts = products.map((product) => {
+      const sold = sale.items.find((item) => item.id === product.id);
+      if (!sold) return product;
+      const updatedProduct = setBranchStock(product, currentBranchId, getBranchStock(product) - sold.qty);
+      changedProducts.push(updatedProduct);
+      return updatedProduct;
+    });
+    const nextSales = [sale, ...sales];
+    const nextPendingSales = [
+      { ...sale, syncStatus: "pending" },
+      ...pendingSales.filter((item) => item.id !== sale.id)
+    ];
+    const checkoutSaved = saveStorageBatch([
+      [STORAGE_KEYS.products, nextProducts],
+      [STORAGE_KEYS.sales, nextSales],
+      [STORAGE_KEYS.pendingSales, nextPendingSales]
+    ]);
+    if (!checkoutSaved) {
+      alert("收款尚未完成：本机无法安全保存订单。购物车和库存都没有改变，请先处理浏览器储存空间后重试。");
+      return;
     }
+    products = nextProducts;
+    sales = nextSales;
+    pendingSales = nextPendingSales;
+    cart = [];
+    els.customerNameInput.value = "";
+    els.customerPhoneInput.value = "";
+    els.affiliateReferralCodeInput.value = "";
+    els.discountInput.value = "0";
+    els.paidInput.value = "";
+    els.paymentReferenceInput.value = "";
+    autoFillPaid = true;
+    if (!hasCloud() || !window.cloudPOS.saveCheckout) {
+      for (const product of changedProducts) {
+        syncProductToCloud(product);
+      }
+    }
+    if (els.paymentDialog.open) els.paymentDialog.close();
+    showReceipt(sale);
+    renderAll();
+    syncSaleToCloud(sale).then(async () => {
+      await syncPendingSaleUpdates();
+      renderSales();
+    });
+  } finally {
+    checkoutInProgress = false;
+    els.confirmPaymentBtn.disabled = false;
+    els.confirmPaymentBtn.textContent = "确认收款";
   }
-  if (els.paymentDialog.open) els.paymentDialog.close();
-  showReceipt(sale);
-  renderAll();
-  syncSaleToCloud(sale).then(async () => {
-    await syncPendingSaleUpdates();
-    renderSales();
-  });
 }
 
 function showReceipt(sale) {
   lastReceiptSale = sale;
-  els.receiptNo.textContent = `订单号：${sale.id}`;
-  els.receiptText.textContent = buildReceipt(sale);
+  renderReceiptContent(sale);
   els.receiptDialog.showModal();
   if (printerSettings.autoPrint && window.thermalPrinter?.isConnected()) {
     printBluetoothReceipt(sale, true);
   }
+}
+
+function renderReceiptContent(sale) {
+  const simplePayCode = getSimplePayIntentCode(sale);
+  els.receiptTitle.textContent = simplePayCode ? "等待顾客付款" : "收款成功";
+  els.receiptNo.textContent = `订单号：${sale.id}`;
+  els.receiptText.textContent = buildReceipt(sale);
+  els.receiptSimplePayPanel.classList.toggle("hidden", !simplePayCode);
+  els.receiptCheckPaymentBtn.classList.toggle("hidden", !isSalePaymentPending(sale));
+  els.receiptPaymentStatus.classList.add("hidden");
+  els.receiptPaymentStatus.classList.remove("error");
+  els.receiptPaymentStatus.textContent = "";
+  if (simplePayCode) {
+    els.receiptSimplePayQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(simplePayCode)}`;
+    els.receiptSimplePayIntent.textContent = window.integrationContract.jobId(sale.id, "simplepay.payment");
+  } else {
+    els.receiptSimplePayQr.removeAttribute("src");
+    els.receiptSimplePayIntent.textContent = "";
+  }
+}
+
+async function refreshSimplePayPayment(saleId, button = null) {
+  const sale = sales.find((item) => item.id === saleId);
+  if (!sale || !isSalePaymentPending(sale)) return false;
+  if (!navigator.onLine || !hasCloud() || !window.cloudPOS.loadSale) {
+    alert("当前无法读取云端付款状态。请联网并使用 Google 登录后重试。");
+    return false;
+  }
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "正在检查";
+  }
+  if (els.receiptDialog.open && lastReceiptSale?.id === saleId) {
+    els.receiptPaymentStatus.classList.remove("hidden", "error");
+    els.receiptPaymentStatus.textContent = "正在读取这张订单的付款状态...";
+  }
+  try {
+    if (pendingSales.some((item) => item.id === saleId)) {
+      const syncResult = await syncSaleToCloud(sale);
+      if (!syncResult.ok) throw new Error("订单尚未同步云端");
+    }
+    const cloudSale = await window.cloudPOS.loadSale(saleId);
+    if (!cloudSale) throw new Error("云端尚未找到这张订单");
+    if (!canManageBranch(cloudSale.branchId || "hq")) {
+      throw new Error("当前账号无权读取这张订单");
+    }
+    if (!isSalePaymentPending(cloudSale)) {
+      const updatedSale = normalizeSaleExternalReferences({
+        ...sale,
+        ...cloudSale,
+        syncStatus: "synced"
+      });
+      const nextSales = sales.map((item) => item.id === saleId ? updatedSale : item);
+      const nextPendingSales = pendingSales.filter((item) => item.id !== saleId);
+      const saved = saveStorageBatch([
+        [STORAGE_KEYS.sales, nextSales],
+        [STORAGE_KEYS.pendingSales, nextPendingSales]
+      ]);
+      if (!saved) throw new Error("本机无法安全保存付款结果");
+      sales = nextSales;
+      pendingSales = nextPendingSales;
+      lastReceiptSale = updatedSale;
+      if (els.receiptDialog.open) {
+        renderReceiptContent(updatedSale);
+        els.receiptPaymentStatus.classList.remove("hidden", "error");
+        els.receiptPaymentStatus.textContent = "SimplePay 付款已确认，订单已计入销售。";
+      }
+      renderAll();
+      return true;
+    }
+    if (els.receiptDialog.open && lastReceiptSale?.id === saleId) {
+      els.receiptPaymentStatus.classList.remove("hidden", "error");
+      els.receiptPaymentStatus.textContent = "尚未收到付款确认，库存继续预留。";
+    } else {
+      alert("尚未收到 SimplePay 付款确认，库存继续预留。");
+    }
+    return false;
+  } catch (error) {
+    const message = `检查付款失败：${error.message || "请稍后重试"}`;
+    if (els.receiptDialog.open && lastReceiptSale?.id === saleId) {
+      els.receiptPaymentStatus.classList.remove("hidden");
+      els.receiptPaymentStatus.classList.add("error");
+      els.receiptPaymentStatus.textContent = message;
+    } else {
+      alert(message);
+    }
+    return false;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+function getSimplePayIntentCode(sale) {
+  if (
+    sale.payment?.method !== "简单支付 / SimplePay"
+    || sale.externalReferences?.simplePayReference
+    || !window.integrationContract
+  ) return "";
+  const intentId = window.integrationContract.jobId(sale.id, "simplepay.payment");
+  return `oneminpay://pos?intentId=${encodeURIComponent(intentId)}`;
 }
 
 function buildReceipt(sale) {
@@ -4238,10 +4446,16 @@ function buildReceipt(sale) {
   lines.push(`小计：${money(sale.subtotal)}`);
   lines.push(`折扣：${money(sale.discount)}`);
   lines.push(`应收：${money(sale.total)}`);
-  lines.push(`实收：${money(sale.paid)}`);
-  lines.push(`找零：${money(sale.change)}`);
+  const simplePayPending = Boolean(getSimplePayIntentCode(sale));
+  lines.push(`实收：${simplePayPending ? "待确认" : money(sale.paid)}`);
+  lines.push(`找零：${simplePayPending ? "-" : money(sale.change)}`);
   lines.push(`付款方式：${sale.payment?.method || "现金"}`);
   if (sale.payment?.reference) lines.push(`参考号：${sale.payment.reference}`);
+  const simplePayCode = getSimplePayIntentCode(sale);
+  if (simplePayCode) {
+    lines.push("付款状态：等待顾客在 SimplePay 确认");
+    lines.push(`SimplePay付款码：${simplePayCode}`);
+  }
   lines.push(appSettings.receiptFooter);
   return lines.join("\n");
 }
@@ -4399,10 +4613,12 @@ function renderSales() {
     ].join(" ").toLowerCase();
     return haystack.includes(keyword);
   });
-  const total = selectedSales.reduce((sum, sale) => sum + (isSaleVoided(sale) ? 0 : sale.total), 0);
+  const completedSelectedSales = getActiveSales(selectedSales);
+  const total = completedSelectedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+  const pendingPaymentCount = selectedSales.filter(isSalePaymentPending).length;
   const dateLabel = showAllSalesDates ? "全部日期" : selectedDate;
   els.salesSummary.textContent = selectedSales.length
-    ? `${dateLabel} · ${selectedSales.length} 单，共 ${money(total)}`
+    ? `${dateLabel} · ${completedSelectedSales.length} 单已收款，共 ${money(total)}${pendingPaymentCount ? ` · ${pendingPaymentCount} 单待付款` : ""}`
     : `${dateLabel} · 暂无销售`;
   els.todaySalesBtn.classList.toggle("active", !showAllSalesDates && selectedDate === inputDate());
   els.allSalesDatesBtn.classList.toggle("active", showAllSalesDates);
@@ -4423,6 +4639,7 @@ function renderSales() {
     const row = document.createElement("div");
     row.className = "sale-item";
     row.classList.toggle("voided", isSaleVoided(sale));
+    row.classList.toggle("payment-pending", isSalePaymentPending(sale));
     row.innerHTML = `
       <div class="sale-item-top">
         <strong>${isSaleVoided(sale) ? "已作废" : money(sale.total)}</strong>
@@ -4440,10 +4657,13 @@ function renderSales() {
       <span class="product-meta">${sale.items.map((item) => `${item.name} x${item.qty}`).join("，")}</span>
       ${requiresInventoryReview(sale) ? `<div class="settlement-warning"><strong>库存待复核</strong><br>${escapeHtml(getInventoryConflictSummary(sale))}</div>` : ""}
       <button class="ghost" type="button" data-edit-integration>关联资料</button>
+      ${isSalePaymentPending(sale) ? '<button class="primary" type="button" data-check-payment>检查付款状态</button>' : ""}
       ${requiresInventoryReview(sale) ? '<button class="ghost" type="button" data-open-inventory-review>前往库存核对</button><button class="primary" type="button" data-resolve-inventory-review>确认库存已复核</button>' : ""}
-      ${canVoidSale(sale) ? '<button class="ghost danger" type="button" data-void-sale>退款 / 作废并回补库存</button>' : ""}
+      ${canVoidSale(sale) ? `<button class="ghost danger" type="button" data-void-sale>${isSalePaymentPending(sale) ? "取消待付款并释放库存" : "退款 / 作废并回补库存"}</button>` : ""}
     `;
     row.querySelector("[data-edit-integration]").addEventListener("click", () => openIntegrationEditor(sale.id));
+    const paymentCheckButton = row.querySelector("[data-check-payment]");
+    if (paymentCheckButton) paymentCheckButton.addEventListener("click", () => refreshSimplePayPayment(sale.id, paymentCheckButton));
     const inventoryButton = row.querySelector("[data-open-inventory-review]");
     if (inventoryButton) inventoryButton.addEventListener("click", () => openInventoryForReview(sale.id));
     const resolveButton = row.querySelector("[data-resolve-inventory-review]");
@@ -4456,10 +4676,12 @@ function renderSales() {
 
 function renderDailyPaymentSummary(selectedSales) {
   const activeSelectedSales = getActiveSales(selectedSales);
+  const nonVoidedSelectedSales = getNonVoidedSales(selectedSales);
   const voidedSelectedSales = selectedSales.filter(isSaleVoided);
+  const pendingPaymentSales = selectedSales.filter(isSalePaymentPending);
   const paymentRows = getPaymentSummaryRows(activeSelectedSales);
   els.dailyPaymentSummaryList.innerHTML = "";
-  if (!paymentRows.length && !voidedSelectedSales.length) {
+  if (!paymentRows.length && !voidedSelectedSales.length && !pendingPaymentSales.length) {
     els.dailyPaymentSummaryList.innerHTML = '<div class="empty compact-empty">当前筛选没有结算资料</div>';
     return;
   }
@@ -4481,12 +4703,13 @@ function renderDailyPaymentSummary(selectedSales) {
       .filter((sale) => visibleIds.has(sale.id))
       .map((sale) => sale.id)
   ).size;
-  const references = activeSelectedSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
+  const references = nonVoidedSelectedSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
   const simplePayPending = references.filter((item) => item.simplePayStatus === "pending").length;
   const affiliatePending = references.filter((item) => item.affiliateStatus === "pending").length;
   const inventoryReviewCount = selectedSales.filter(requiresInventoryReview).length;
   const alerts = [
     voidedSelectedSales.length ? `作废 ${voidedSelectedSales.length} 单（原金额 ${money(voidedSelectedSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0))}）` : "",
+    pendingPaymentSales.length ? `待付款 ${pendingPaymentSales.length} 单（${money(pendingPaymentSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0))}，不计入收入）` : "",
     pendingOrderCount ? `待同步 ${pendingOrderCount} 单` : "",
     simplePayPending ? `SimplePay 待确认 ${simplePayPending} 单` : "",
     affiliatePending ? `联盟待关联 ${affiliatePending} 单` : "",
@@ -4770,6 +4993,7 @@ function exportDailySettlement() {
     return;
   }
   const selectedSales = getActiveSales(dateSales);
+  const pendingPaymentSales = dateSales.filter(isSalePaymentPending);
   const voidedSales = dateSales.filter(isSaleVoided);
   const selectedIds = new Set(dateSales.map((sale) => sale.id));
   const pendingOrderIds = new Set(
@@ -4777,7 +5001,8 @@ function exportDailySettlement() {
       .filter((sale) => selectedIds.has(sale.id))
       .map((sale) => sale.id)
   );
-  const externalReferences = selectedSales.map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
+  const externalReferences = getNonVoidedSales(dateSales)
+    .map((sale) => normalizeSaleExternalReferences(sale).externalReferences);
   const simplePayPending = externalReferences.filter((item) => item.simplePayStatus === "pending").length;
   const affiliatePending = externalReferences.filter((item) => item.affiliateStatus === "pending").length;
   const inventoryReviewCount = dateSales.filter(requiresInventoryReview).length;
@@ -4823,6 +5048,7 @@ function exportDailySettlement() {
   }
   rows.push(
     ["风险汇总", selectedDate, "", "", pendingOrderIds.size, "", "", "待同步订单", "", "", "", "", "", ""],
+    ["风险汇总", selectedDate, "", "", pendingPaymentSales.length, pendingPaymentSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0), "", "待付款订单（不计收入）", "", "", "", "", "", ""],
     ["风险汇总", selectedDate, "", "", simplePayPending, "", "", "SimplePay 待确认", "", "", "", "", "", ""],
     ["风险汇总", selectedDate, "", "", affiliatePending, "", "", "联盟待关联", "", "", "", "", "", ""],
     ["风险汇总", selectedDate, "", "", inventoryReviewCount, "", "", "库存待复核", "", "", "", "", "", ""],
@@ -5517,6 +5743,9 @@ els.seedBtn.addEventListener("click", () => {
   renderAll();
 });
 els.closeReceiptBtn.addEventListener("click", () => els.receiptDialog.close());
+els.receiptCheckPaymentBtn.addEventListener("click", () => {
+  if (lastReceiptSale) refreshSimplePayPayment(lastReceiptSale.id, els.receiptCheckPaymentBtn);
+});
 els.printReceiptBtn.addEventListener("click", () => window.print());
 els.integrationForm.addEventListener("submit", saveIntegrationDetails);
 els.closeIntegrationBtn.addEventListener("click", closeIntegrationEditor);
