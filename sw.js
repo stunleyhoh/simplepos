@@ -1,4 +1,4 @@
-const CACHE_NAME = "simple-pos-v97";
+const CACHE_NAME = "simple-pos-v106";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -29,6 +29,11 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.pathname.endsWith("/firebase-config.local.js")) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
   event.respondWith(
     fetch(event.request)
       .then((response) => {

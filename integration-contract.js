@@ -80,7 +80,7 @@
       references.affiliateReferralCode || customer.referralCode
     ).toUpperCase();
     const eligibleItems = affiliateItems(sale.items);
-    if (referralCode && eligibleItems.length) {
+    if (text(customer.phone) && eligibleItems.length) {
       const affiliateAmount = money(
         eligibleItems.reduce(
           (sum, item) => sum + Number(item.price || 0) * Number(item.qty || item.quantity || 0),

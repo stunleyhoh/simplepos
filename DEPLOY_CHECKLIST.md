@@ -11,11 +11,15 @@
 
 ## 本地文件
 
+- 运行 `node scripts/integration-preflight.js`，结果为 `0 errors`。
 - `firebase-config.local.js` 存在，并且内容是当前 Firebase 项目的真实配置。
 - `firebase-config.local.js` 不提交到 GitHub。
 - `firebase-config.example.js` 可以提交，用作模板。
 - `firestore.rules` 已经是最新规则。
 - `firebase.json` 和 `.firebaserc` 存在。
+- Firebase Hosting 只发布POS运行资源，不公开 `functions`、`tests`、说明文档、规则文件或本机日志。
+- `functions/node_modules` 和 `.pnpm-store` 不提交到 GitHub。
+- `firebase-config.local.js` 使用 `no-store` 响应头，并且不会进入 Service Worker 离线缓存。
 
 ## 功能测试
 
@@ -70,3 +74,5 @@ https://simplepos-2900e.web.app
 - Google 登录的 Authorized domains 是否包含线上域名。
 
 注意：`firebase-config.local.js` 被 `.gitignore` 忽略，是为了避免 GitHub 再次提示 secret。部署 Firebase Hosting 时，本机文件仍可以被部署；提交到 GitHub 时不要提交它。
+
+Firebase Web 配置会由浏览器读取，因此不能当作服务器密钥使用。API Key 必须限制为实际使用的 HTTPS 域名；服务账号私钥和跨项目凭证不得放入任何前端文件。

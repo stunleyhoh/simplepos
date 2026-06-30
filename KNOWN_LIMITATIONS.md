@@ -111,3 +111,9 @@
 - iPhone / iPad 浏览器目前不支持 Web Bluetooth。
 - 只支持传统 Bluetooth Classic SPP、不支持 BLE 的热敏打印机不会出现在配对清单中，可改用“系统打印”。
 - 不同厂牌 ESC/POS 蓝牙服务可能采用专用 UUID；若能够配对但提示找不到打印通道，需要补充该型号的服务 UUID。
+
+## 三系统安全审计
+
+- 2026-06-30 已完成一次三系统代码审计，记录见 `SECURITY_AUDIT_2026-06-30.md`。
+- SimplePay 安全资金开关仍关闭，三个项目云函数、规则和 IAM 尚未完成真实环境验收。
+- SimplePay 与联盟旧前端仍需完成统一 HTML 转义，正式上线前不能忽略。
